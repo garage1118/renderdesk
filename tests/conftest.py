@@ -3,7 +3,7 @@ import tempfile
 
 _tmpdir = tempfile.mkdtemp()
 os.environ.setdefault("RENDERDESK_DATABASE_PATH", os.path.join(_tmpdir, "test.db"))
-os.environ.setdefault("RENDERDESK_PUBLIC_BASE_URL", "http://testserver")
+os.environ.setdefault("RENDERDESK_PUBLIC_BASE_URL", "http://localhost:8000")
 
 import uuid
 from datetime import timedelta

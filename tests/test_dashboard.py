@@ -1,9 +1,13 @@
+import re
+
 import httpx
 import pytest
+from sqlalchemy import select
 
-from renderdesk import comments, shares, tools
+from renderdesk import auth, comments, shares, tools
 from renderdesk.app import app
 from renderdesk.db import session_scope
+from renderdesk.models import Connection
 
 from .conftest import make_connection, make_user
 
@@ -11,7 +15,7 @@ from .conftest import make_connection, make_user
 @pytest.fixture
 async def client():
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as c:
         yield c
 
 
@@ -22,7 +26,7 @@ async def _login(client, email, password):
 async def test_unauthenticated_dashboard_redirects_to_login(client):
     resp = await client.get("/dashboard")
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/dashboard/login"
+    assert resp.headers["location"] == "/dashboard/login?next=%2Fdashboard"
 
 
 async def test_wrong_password_rejected(client):
@@ -128,6 +132,125 @@ async def test_shared_artifact_shows_up_for_recipient_but_not_via_their_mcp_conn
     async with session_scope() as session:
         with pytest.raises(tools.NotFoundError):
             await comments.list_comments(session, recipient_connection, artifact_id)
+
+
+async def test_login_bounces_back_to_next_param(client):
+    await make_user(email="dave@example.com", password="correct-horse")
+
+    resp = await client.get("/dashboard/a/does-not-exist")
+    assert resp.status_code == 303
+    login_url = resp.headers["location"]
+    assert login_url == "/dashboard/login?next=%2Fdashboard%2Fa%2Fdoes-not-exist"
+
+    login_page = await client.get(login_url)
+    assert 'value="/dashboard/a/does-not-exist"' in login_page.text
+
+    login_resp = await client.post(
+        "/dashboard/login",
+        data={"email": "dave@example.com", "password": "correct-horse", "next": "/dashboard/a/does-not-exist"},
+    )
+    assert login_resp.status_code == 303
+    # Bounced back to the originally-requested page (which 404s on its own
+    # merits — the artifact doesn't exist — but the redirect itself worked).
+    assert login_resp.headers["location"] == "/dashboard/a/does-not-exist"
+
+
+async def test_create_personal_token_from_dashboard(client):
+    await make_user(email="dave@example.com", password="correct-horse")
+    await _login(client, "dave@example.com", "correct-horse")
+
+    resp = await client.post("/dashboard/connections/tokens", data={"label": "laptop"})
+    assert resp.status_code == 200
+
+    # Token is rendered exactly once on the confirmation page.
+    match = re.search(r'id="token">([^<]+)</span>', resp.text)
+    assert match is not None
+    token = match.group(1)
+
+    async with session_scope() as session:
+        connection = await auth.resolve_connection(session, token)
+    assert connection is not None
+    assert connection.label == "laptop"
+
+    connections_resp = await client.get("/dashboard/connections")
+    assert "laptop" in connections_resp.text
+    assert "Personal token" in connections_resp.text
+
+
+async def test_revoking_a_personal_token_connection_blocks_it(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="claude-code")
+
+    await _login(client, "dave@example.com", "correct-horse")
+
+    connections_resp = await client.get("/dashboard/connections")
+    assert connections_resp.status_code == 200
+    assert "claude-code" in connections_resp.text
+    assert "Personal token" in connections_resp.text
+
+    revoke_resp = await client.post(f"/dashboard/connections/{connection_id}/revoke")
+    assert revoke_resp.status_code == 303
+
+    async with session_scope() as session:
+        # Same lookup MCPAuthMiddleware performs for a personal token — the
+        # token itself is unaffected, but the connection is now revoked.
+        connection = await auth.resolve_connection(session, f"token-for-{connection_id}")
+    assert connection is None
+
+
+async def test_deleting_an_active_connection_is_rejected(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="claude-code")
+    await _login(client, "dave@example.com", "correct-horse")
+
+    resp = await client.post(f"/dashboard/connections/{connection_id}/delete")
+    assert resp.status_code == 400
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection is not None
+
+
+async def test_deleting_a_revoked_empty_connection_removes_it(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="unused")
+    await _login(client, "dave@example.com", "correct-horse")
+
+    await client.post(f"/dashboard/connections/{connection_id}/revoke")
+
+    resp = await client.post(f"/dashboard/connections/{connection_id}/delete")
+    assert resp.status_code == 303
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection is None
+
+    connections_resp = await client.get("/dashboard/connections")
+    assert "unused" not in connections_resp.text
+
+
+async def test_deleting_a_revoked_connection_with_artifacts_is_blocked(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="claude-code")
+    async with session_scope() as session:
+        await tools.publish_artifact(session, connection_id, "hello", "markdown")
+
+    await _login(client, "dave@example.com", "correct-horse")
+    await client.post(f"/dashboard/connections/{connection_id}/revoke")
+
+    resp = await client.post(f"/dashboard/connections/{connection_id}/delete")
+    assert resp.status_code == 400
+    assert "1 artifact(s)" in resp.text
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection is not None  # still there, just revoked
 
 
 async def test_logout_clears_session(client):

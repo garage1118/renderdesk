@@ -1,0 +1,21 @@
+<!doctype html>
+<title>renderdesk — new token</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; max-width: 640px; }
+  h1 { font-size: 1.2rem; }
+  .warn { color: #f59e0b; font-size: 0.9rem; margin-bottom: 1rem; }
+  .token-box {
+    display: flex; gap: 0.5rem; align-items: center; background: #1e293b;
+    border: 1px solid #334155; border-radius: 8px; padding: 0.75rem 1rem;
+    font-family: ui-monospace, monospace; word-break: break-all;
+  }
+  button { background: #38bdf8; color: #0f172a; border: none; font-weight: 600; padding: 0.4rem 0.75rem; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  a { color: #38bdf8; }
+</style>
+<h1>Token created</h1>
+<p class="warn">Copy this now — it will not be shown again.</p>
+<div class="token-box">
+  <span id="token">{{ token }}</span>
+  <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy</button>
+</div>
+<p><a href="/dashboard/connections">&larr; Back to connections</a></p>

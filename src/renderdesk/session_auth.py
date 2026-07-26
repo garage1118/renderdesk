@@ -1,5 +1,6 @@
 import uuid
 from datetime import timedelta
+from urllib.parse import quote
 
 import bcrypt
 from fastapi import HTTPException, Request
@@ -53,6 +54,15 @@ async def delete_session(db_session: AsyncSession, token: str) -> None:
         await db_session.commit()
 
 
+def safe_next_path(path: str) -> str:
+    # Only ever redirect back to a same-site relative path — a `next` value
+    # like "//evil.com" or "https://evil.com" would otherwise be an open
+    # redirect off the login page.
+    if path.startswith("/") and not path.startswith("//"):
+        return path
+    return "/dashboard"
+
+
 async def require_current_user(request: Request) -> User:
     """FastAPI dependency for every dashboard route except login itself.
     Deliberately a separate code path from MCPAuthMiddleware (auth.py) — a
@@ -64,4 +74,6 @@ async def require_current_user(request: Request) -> User:
             user = await resolve_session(db_session, token)
         if user is not None:
             return user
-    raise HTTPException(status_code=303, headers={"Location": LOGIN_PATH})
+    next_path = safe_next_path(request.url.path + (f"?{request.url.query}" if request.url.query else ""))
+    login_url = f"{LOGIN_PATH}?next={quote(next_path, safe='')}"
+    raise HTTPException(status_code=303, headers={"Location": login_url})

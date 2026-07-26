@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from renderdesk.db import Base
@@ -29,14 +29,20 @@ class User(Base):
 
 
 class Connection(Base):
+    """A personal token (token_hash/expires_at set, client_id null) or an
+    OAuth-authorized client (client_id set, token_hash/expires_at null — its
+    live credential is a rotating OAuthAccessToken/OAuthRefreshToken pair
+    instead of one static token here)."""
+
     __tablename__ = "connections"
 
     id: Mapped[str] = mapped_column(primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    token_hash: Mapped[str] = mapped_column(unique=True, index=True)
+    token_hash: Mapped[str | None] = mapped_column(unique=True, index=True, default=None)
+    client_id: Mapped[str | None] = mapped_column(ForeignKey("oauth_clients.client_id"), default=None, index=True)
     label: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
@@ -115,4 +121,67 @@ class ArtifactShare(Base):
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
     shared_with_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     shared_by_connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OAuthClient(Base):
+    """A dynamically-registered (RFC 7591) OAuth client. metadata holds the
+    full OAuthClientInformationFull the mcp SDK's registration handler
+    builds for us, including client_secret if one was issued — stored as one
+    JSON blob since oauth_provider.py only ever round-trips it whole, never
+    queries on individual fields."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(primary_key=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OAuthAuthorizationCode(Base):
+    """Doubles as both the pending-authorization record created when a client
+    hits /authorize (approved=False, user_id=None, code_hash=None) and the
+    issued single-use code after the human approves at /oauth/consent — a
+    consent screen has to sit in between the two anyway, so one row tracks
+    both instead of a separate pending-request table."""
+
+    __tablename__ = "oauth_authorization_codes"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("oauth_clients.client_id"), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), default=None)
+    redirect_uri: Mapped[str] = mapped_column()
+    code_challenge: Mapped[str] = mapped_column()
+    scope: Mapped[str | None] = mapped_column(default=None)
+    state: Mapped[str | None] = mapped_column(default=None)
+    code_hash: Mapped[str | None] = mapped_column(unique=True, index=True, default=None)
+    approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OAuthAccessToken(Base):
+    __tablename__ = "oauth_access_tokens"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(unique=True, index=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OAuthRefreshToken(Base):
+    """revoked_at is set (never deleted) when a token is rotated away — a
+    presented token that hashes to an already-revoked row is a replay of a
+    stolen/rotated-away token, the signal that lets exchange_refresh_token
+    detect theft and revoke the whole connection immediately."""
+
+    __tablename__ = "oauth_refresh_tokens"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(unique=True, index=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"), index=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("oauth_clients.client_id"))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

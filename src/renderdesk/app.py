@@ -6,11 +6,18 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from pydantic import AnyHttpUrl
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from renderdesk.auth import MCPAuthMiddleware
+from renderdesk.config import settings
 from renderdesk.dashboard import router as dashboard_router
+from renderdesk.db import engine
 from renderdesk.mcp_server import mcp
+from renderdesk.oauth_provider import oauth_provider
 from renderdesk.view import router as view_router
 
 _mcp_asgi_app = mcp.streamable_http_app()
@@ -54,7 +61,34 @@ app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))
 
+# Mounted on the top-level app (not nested under /mcp) so paths match
+# issuer_url cleanly, and so this doesn't stack a second bearer-auth layer on
+# top of MCPAuthMiddleware, which already fully owns the /mcp mount.
+app.router.routes.extend(
+    create_auth_routes(
+        provider=oauth_provider,
+        issuer_url=AnyHttpUrl(settings.public_base_url),
+        client_registration_options=ClientRegistrationOptions(enabled=True),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+)
+app.router.routes.extend(
+    create_protected_resource_routes(
+        resource_url=AnyHttpUrl(f"{settings.public_base_url}/mcp"),
+        authorization_servers=[AnyHttpUrl(settings.public_base_url)],
+    )
+)
+
 
 @app.get("/")
 async def root():
     return RedirectResponse(url="/dashboard")
+
+
+@app.get("/health")
+async def health():
+    # Confirms the app can actually reach its database, not just that the
+    # process is alive — a locked/corrupted SQLite file should fail this.
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+    return {"status": "ok"}

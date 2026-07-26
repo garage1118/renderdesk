@@ -1,15 +1,13 @@
 import asyncio
 import uuid
-from datetime import timedelta
 
 import bcrypt
 import click
 from sqlalchemy import select
 
-from renderdesk.auth import generate_token, hash_token
-from renderdesk.config import settings
 from renderdesk.db import session_scope
-from renderdesk.models import Connection, User, utcnow
+from renderdesk.models import User, utcnow
+from renderdesk.tokens import create_personal_token
 
 
 async def _create_user(email: str, password: str) -> None:
@@ -28,19 +26,7 @@ async def _create_token(email: str, label: str | None) -> str:
         user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if user is None:
             raise click.ClickException(f"no user with email {email!r} — run create-user first")
-
-        token = generate_token()
-        session.add(
-            Connection(
-                id=str(uuid.uuid4()),
-                user_id=user.id,
-                token_hash=hash_token(token),
-                label=label,
-                expires_at=utcnow() + timedelta(days=settings.token_expiry_days),
-            )
-        )
-        await session.commit()
-    return token
+        return await create_personal_token(session, user.id, label)
 
 
 @click.group()
@@ -61,8 +47,9 @@ def create_user(email: str) -> None:
 @click.option("--email", required=True, help="Email of the user this connection belongs to")
 @click.option("--label", default=None, help="Optional label to identify this connection (e.g. 'claude-code')")
 def create_token(email: str, label: str | None) -> None:
-    """Issue a new MCP bearer token for the given user. This is the only way to
-    create one — there is no token-issuing MCP tool."""
+    """Issue a new MCP bearer token for the given user. Equivalent to creating
+    one from the dashboard's Connections page while logged in as that user —
+    there is no token-issuing MCP tool either way."""
     token = asyncio.run(_create_token(email, label))
     click.echo("Token (save this now, it will not be shown again):")
     click.echo(token)

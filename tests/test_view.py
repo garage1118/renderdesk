@@ -11,7 +11,7 @@ from .conftest import make_connection
 @pytest.fixture
 async def client():
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as c:
         yield c
 
 

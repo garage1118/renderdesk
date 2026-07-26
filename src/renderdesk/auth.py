@@ -61,17 +61,29 @@ class MCPAuthMiddleware:
         auth_header = headers.get("authorization", "")
         token = auth_header[len("Bearer ") :].strip() if auth_header.startswith("Bearer ") else None
 
-        connection = None
+        connection_id = None
         if token:
             async with session_scope() as session:
                 connection = await resolve_connection(session, token)
+            if connection is not None:
+                connection_id = connection.id
+            else:
+                # Not a personal token — try it as an OAuth access token.
+                # Both paths converge on the same connection_id contextvar,
+                # so tools.py/comments.py/shares.py never need to know which
+                # kind of credential authenticated this request.
+                from renderdesk.oauth_provider import oauth_provider
 
-        if connection is None:
+                access_token = await oauth_provider.load_access_token(token)
+                if access_token is not None:
+                    connection_id = access_token.subject
+
+        if connection_id is None:
             response = JSONResponse({"error": "unauthorized"}, status_code=401)
             await response(scope, receive, send)
             return
 
-        reset_token = current_connection_id.set(connection.id)
+        reset_token = current_connection_id.set(connection_id)
         try:
             await self.app(scope, receive, send)
         finally:

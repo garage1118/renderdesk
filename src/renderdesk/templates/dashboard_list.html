@@ -11,7 +11,10 @@
 </style>
 <header>
   <h1 style="margin:0;font-size:1.2rem;">renderdesk</h1>
-  <form method="post" action="/dashboard/logout"><button type="submit">Log out ({{ user.email }})</button></form>
+  <div style="display:flex;gap:1rem;align-items:center;">
+    <a href="/dashboard/connections">Connections</a>
+    <form method="post" action="/dashboard/logout"><button type="submit">Log out ({{ user.email }})</button></form>
+  </div>
 </header>
 <h2 style="font-size:1rem;">Your artifacts</h2>
 {% if artifacts %}
