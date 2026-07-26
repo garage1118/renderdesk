@@ -22,11 +22,6 @@ engine = _make_engine()
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     async with async_session_factory() as session:

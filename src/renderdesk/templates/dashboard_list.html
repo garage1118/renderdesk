@@ -1,0 +1,58 @@
+<!doctype html>
+<title>renderdesk — dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; }
+  a { color: #38bdf8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+  button { background: none; border: 1px solid #334155; color: #e2e8f0; padding: 0.35rem 0.75rem; border-radius: 6px; cursor: pointer; }
+</style>
+<header>
+  <h1 style="margin:0;font-size:1.2rem;">renderdesk</h1>
+  <form method="post" action="/dashboard/logout"><button type="submit">Log out ({{ user.email }})</button></form>
+</header>
+<h2 style="font-size:1rem;">Your artifacts</h2>
+{% if artifacts %}
+<table>
+  <tr><th>Title</th><th>Format</th><th>Connection</th><th>Updated</th><th></th></tr>
+  {% for row in artifacts %}
+  <tr>
+    <td>{{ row.artifact.title or "Untitled" }}</td>
+    <td>{{ row.artifact.format.value }}</td>
+    <td>{{ row.connection_label or "—" }}</td>
+    <td>{{ row.artifact.updated_at }}</td>
+    <td>
+      <a href="/dashboard/a/{{ row.artifact.id }}">Open</a>
+      &middot;
+      <a href="/a/{{ row.artifact.id }}" target="_blank">View</a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No artifacts published yet.</p>
+{% endif %}
+
+<h2 style="font-size:1rem;margin-top:2rem;">Shared with you</h2>
+{% if shared_with_you %}
+<table>
+  <tr><th>Title</th><th>Format</th><th>Shared by</th><th>Shared</th><th></th></tr>
+  {% for row in shared_with_you %}
+  <tr>
+    <td>{{ row.title or "Untitled" }}</td>
+    <td>{{ row.format }}</td>
+    <td>{{ row.shared_by_connection_label or "—" }}</td>
+    <td>{{ row.shared_at }}</td>
+    <td>
+      <a href="/dashboard/a/{{ row.artifact_id }}">Open</a>
+      &middot;
+      <a href="/a/{{ row.artifact_id }}" target="_blank">View</a>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>Nothing shared with you yet.</p>
+{% endif %}

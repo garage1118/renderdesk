@@ -2,35 +2,68 @@ import asyncio
 import uuid
 from datetime import timedelta
 
+import bcrypt
 import click
+from sqlalchemy import select
 
 from renderdesk.auth import generate_token, hash_token
 from renderdesk.config import settings
-from renderdesk.db import init_db, session_scope
-from renderdesk.models import Connection, utcnow
+from renderdesk.db import session_scope
+from renderdesk.models import Connection, User, utcnow
 
 
-async def _create_token(label: str | None) -> str:
-    await init_db()
-    token = generate_token()
-    connection = Connection(
-        id=str(uuid.uuid4()),
-        token_hash=hash_token(token),
-        label=label,
-        expires_at=utcnow() + timedelta(days=settings.token_expiry_days),
-    )
+async def _create_user(email: str, password: str) -> None:
     async with session_scope() as session:
-        session.add(connection)
+        existing = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if existing is not None:
+            raise click.ClickException(f"a user with email {email!r} already exists")
+
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        session.add(User(id=str(uuid.uuid4()), email=email, password_hash=password_hash, created_at=utcnow()))
+        await session.commit()
+
+
+async def _create_token(email: str, label: str | None) -> str:
+    async with session_scope() as session:
+        user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if user is None:
+            raise click.ClickException(f"no user with email {email!r} — run create-user first")
+
+        token = generate_token()
+        session.add(
+            Connection(
+                id=str(uuid.uuid4()),
+                user_id=user.id,
+                token_hash=hash_token(token),
+                label=label,
+                expires_at=utcnow() + timedelta(days=settings.token_expiry_days),
+            )
+        )
         await session.commit()
     return token
 
 
-@click.command()
+@click.group()
+def main() -> None:
+    pass
+
+
+@main.command("create-user")
+@click.option("--email", required=True, help="Email to log into the web dashboard with")
+def create_user(email: str) -> None:
+    """Create a human user who can log into the web dashboard."""
+    password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    asyncio.run(_create_user(email, password))
+    click.echo(f"Created user {email}")
+
+
+@main.command("create-token")
+@click.option("--email", required=True, help="Email of the user this connection belongs to")
 @click.option("--label", default=None, help="Optional label to identify this connection (e.g. 'claude-code')")
-def main(label: str | None) -> None:
-    """Issue a new MCP bearer token. This is the only way to create one in Stage 1 —
-    there is no token-issuing MCP tool or web UI."""
-    token = asyncio.run(_create_token(label))
+def create_token(email: str, label: str | None) -> None:
+    """Issue a new MCP bearer token for the given user. This is the only way to
+    create one — there is no token-issuing MCP tool."""
+    token = asyncio.run(_create_token(email, label))
     click.echo("Token (save this now, it will not be shown again):")
     click.echo(token)
 

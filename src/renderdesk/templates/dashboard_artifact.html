@@ -1,0 +1,49 @@
+<!doctype html>
+<title>renderdesk — {{ artifact.title or "Untitled" }}</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }
+  .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+  iframe { flex: 2; height: 70vh; border: 1px solid #1e293b; border-radius: 8px; background: white; }
+  .comments { flex: 1; min-width: 320px; }
+  .thread { border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem; }
+  .thread.resolved { opacity: 0.5; }
+  .comment { padding: 0.4rem 0; border-bottom: 1px solid #1e293b; }
+  .comment:last-child { border-bottom: none; }
+  .author { font-size: 0.75rem; color: #94a3b8; }
+  textarea, input[type=text] { width: 100%; box-sizing: border-box; padding: 0.5rem; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+  button { padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid #334155; background: none; color: #e2e8f0; cursor: pointer; }
+  a { color: #38bdf8; }
+</style>
+<p><a href="/dashboard">&larr; All artifacts</a></p>
+<h1 style="font-size:1.2rem;">{{ artifact.title or "Untitled" }}</h1>
+<div class="layout">
+  <iframe src="/a/{{ artifact.id }}"></iframe>
+  <div class="comments">
+    <h2 style="font-size:1rem;">Comments</h2>
+    {% for thread in threads %}
+    <div class="thread {{ 'resolved' if thread.resolved else '' }}">
+      {% for c in thread.comments %}
+      <div class="comment">
+        <div class="author">{{ c.author }} &middot; {{ c.created_at }}</div>
+        <div>{{ c.body }}</div>
+      </div>
+      {% endfor %}
+      <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/reply" style="margin-top:0.5rem;">
+        <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+        <input type="text" name="body" placeholder="Reply..." required>
+        <button type="submit">Reply</button>
+      </form>
+      <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/resolve" style="margin-top:0.35rem;">
+        <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+        <button type="submit">{{ "Reopen" if thread.resolved else "Resolve" }}</button>
+      </form>
+    </div>
+    {% else %}
+    <p>No comments yet.</p>
+    {% endfor %}
+    <form method="post" action="/dashboard/a/{{ artifact.id }}/comments">
+      <textarea name="body" placeholder="Start a new thread..." required rows="3"></textarea>
+      <button type="submit" style="margin-top:0.5rem;">Comment</button>
+    </form>
+  </div>
+</div>

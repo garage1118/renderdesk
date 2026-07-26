@@ -27,7 +27,7 @@ def _artifact_url(artifact_id: str) -> str:
     return f"{settings.public_base_url}/a/{artifact_id}"
 
 
-async def _get_owned_artifact(session: AsyncSession, connection_id: str, artifact_id: str) -> Artifact:
+async def get_owned_artifact(session: AsyncSession, connection_id: str, artifact_id: str) -> Artifact:
     result = await session.execute(
         select(Artifact).where(Artifact.id == artifact_id, Artifact.connection_id == connection_id)
     )
@@ -78,7 +78,7 @@ async def update_artifact(
     format: str | None = None,
     title: str | None = None,
 ) -> dict:
-    artifact = await _get_owned_artifact(session, connection_id, artifact_id)
+    artifact = await get_owned_artifact(session, connection_id, artifact_id)
 
     if artifact.version != base_version:
         raise VersionConflictError(
@@ -116,7 +116,7 @@ async def get_artifact(
     artifact_id: str,
     include_content: bool = False,
 ) -> dict:
-    artifact = await _get_owned_artifact(session, connection_id, artifact_id)
+    artifact = await get_owned_artifact(session, connection_id, artifact_id)
 
     result = {
         "artifact_id": artifact.id,
