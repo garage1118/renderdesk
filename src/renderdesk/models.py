@@ -17,6 +17,7 @@ def utcnow() -> datetime:
 class ArtifactFormat(str, enum.Enum):
     html = "html"
     markdown = "markdown"
+    code = "code"
 
 
 class User(Base):
@@ -66,6 +67,11 @@ class Artifact(Base):
     connection_id: Mapped[str] = mapped_column(ForeignKey("connections.id"), index=True)
     title: Mapped[str | None] = mapped_column(default=None)
     format: Mapped[ArtifactFormat] = mapped_column(Enum(ArtifactFormat))
+    # Only meaningful for format=code (drives Pygments syntax highlighting);
+    # free-form rather than validated against a fixed list — Pygments has
+    # hundreds of lexer aliases, and an unrecognized value just falls back
+    # to plain text (see view.py), so there's nothing to enforce here.
+    language: Mapped[str | None] = mapped_column(default=None)
     content: Mapped[str] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1)
     byte_size: Mapped[int] = mapped_column(Integer)
@@ -85,6 +91,7 @@ class ArtifactVersion(Base):
     version: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     format: Mapped[ArtifactFormat] = mapped_column(Enum(ArtifactFormat))
+    language: Mapped[str | None] = mapped_column(default=None)
     title: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

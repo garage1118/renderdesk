@@ -70,3 +70,54 @@ async def test_resharing_is_idempotent():
     async with session_scope() as session:
         second = await shares.share_artifact(session, connection_id, artifact_id, "recipient3@example.com")
     assert second["already_shared"] is True
+
+
+async def test_share_from_dashboard_then_list_and_unshare():
+    owner_id = await make_user(email="dashboard-owner@example.com")
+    connection_id = await make_connection(user_id=owner_id)
+    artifact_id = await _publish(connection_id)
+    await make_user(email="dashboard-recipient@example.com")
+
+    async with session_scope() as session:
+        result = await shares.share_artifact_from_dashboard(
+            session, owner_id, artifact_id, "dashboard-recipient@example.com"
+        )
+    assert result["already_shared"] is False
+
+    async with session_scope() as session:
+        share_list = await shares.list_shares(session, artifact_id)
+    assert len(share_list) == 1
+    assert share_list[0]["email"] == "dashboard-recipient@example.com"
+
+    async with session_scope() as session:
+        await shares.unshare_artifact(session, owner_id, artifact_id, share_list[0]["share_id"])
+
+    async with session_scope() as session:
+        assert await shares.list_shares(session, artifact_id) == []
+
+
+async def test_share_from_dashboard_by_non_owner_raises():
+    owner_id = await make_user(email="real-owner@example.com")
+    connection_id = await make_connection(user_id=owner_id)
+    artifact_id = await _publish(connection_id)
+    other_user_id = await make_user(email="not-the-owner@example.com")
+    await make_user(email="target@example.com")
+
+    async with session_scope() as session:
+        with pytest.raises(tools.NotFoundError):
+            await shares.share_artifact_from_dashboard(session, other_user_id, artifact_id, "target@example.com")
+
+
+async def test_unshare_by_non_owner_raises():
+    owner_id = await make_user(email="owns-it@example.com")
+    connection_id = await make_connection(user_id=owner_id)
+    artifact_id = await _publish(connection_id)
+    recipient_id = await make_user(email="recipient4@example.com")
+
+    async with session_scope() as session:
+        await shares.share_artifact_from_dashboard(session, owner_id, artifact_id, "recipient4@example.com")
+        share_list = await shares.list_shares(session, artifact_id)
+
+    async with session_scope() as session:
+        with pytest.raises(tools.NotFoundError):
+            await shares.unshare_artifact(session, recipient_id, artifact_id, share_list[0]["share_id"])

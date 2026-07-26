@@ -25,11 +25,19 @@ mcp = FastMCP("renderdesk", streamable_http_path="/", transport_security=_transp
 
 
 @mcp.tool()
-async def publish_artifact(content: str, format: Literal["html", "markdown"], title: str | None = None) -> dict:
-    """Publish a new self-contained HTML or Markdown artifact and get back a shareable URL."""
+async def publish_artifact(
+    content: str,
+    format: Literal["html", "markdown", "code"],
+    title: str | None = None,
+    language: str | None = None,
+) -> dict:
+    """Publish a new self-contained HTML, Markdown, or Code artifact and get back a shareable
+    URL. For format="code", content is rendered read-only with syntax highlighting (not
+    executed) — pass language (e.g. "python", "rust") to drive highlighting; an omitted or
+    unrecognized language falls back to plain text."""
     connection_id = get_current_connection_id()
     async with session_scope() as session:
-        return await tools.publish_artifact(session, connection_id, content, format, title)
+        return await tools.publish_artifact(session, connection_id, content, format, title, language)
 
 
 @mcp.tool()
@@ -37,8 +45,9 @@ async def update_artifact(
     artifact_id: str,
     content: str,
     base_version: int,
-    format: Literal["html", "markdown"] | None = None,
+    format: Literal["html", "markdown", "code"] | None = None,
     title: str | None = None,
+    language: str | None = None,
 ) -> dict:
     """Update an artifact you previously published. base_version must match the artifact's
     current version (from publish_artifact/get_artifact/list_artifacts) or the update is
@@ -46,7 +55,7 @@ async def update_artifact(
     connection_id = get_current_connection_id()
     async with session_scope() as session:
         return await tools.update_artifact(
-            session, connection_id, artifact_id, content, base_version, format, title
+            session, connection_id, artifact_id, content, base_version, format, title, language
         )
 
 

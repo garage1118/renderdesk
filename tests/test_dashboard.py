@@ -253,6 +253,159 @@ async def test_deleting_a_revoked_connection_with_artifacts_is_blocked(client):
     assert connection is not None  # still there, just revoked
 
 
+async def test_owner_can_share_and_unshare_artifact_from_dashboard(client):
+    owner_id = await make_user(email="owner2@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+    await make_user(email="recipient5@example.com")
+
+    await _login(client, "owner2@example.com", "owner-pass")
+
+    share_resp = await client.post(f"/dashboard/a/{artifact_id}/share", data={"email": "recipient5@example.com"})
+    assert share_resp.status_code == 303
+
+    detail_resp = await client.get(f"/dashboard/a/{artifact_id}")
+    assert "recipient5@example.com" in detail_resp.text
+
+    async with session_scope() as session:
+        share_list = await shares.list_shares(session, artifact_id)
+    assert len(share_list) == 1
+
+    unshare_resp = await client.post(
+        f"/dashboard/a/{artifact_id}/shares/{share_list[0]['share_id']}/unshare"
+    )
+    assert unshare_resp.status_code == 303
+
+    async with session_scope() as session:
+        assert await shares.list_shares(session, artifact_id) == []
+
+
+async def test_share_with_unknown_email_shows_error_on_page(client):
+    owner_id = await make_user(email="owner3@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+
+    await _login(client, "owner3@example.com", "owner-pass")
+
+    resp = await client.post(
+        f"/dashboard/a/{published['artifact_id']}/share", data={"email": "nobody-here@example.com"}
+    )
+    assert resp.status_code == 400
+    assert "no user with email" in resp.text
+
+
+async def test_recipient_cannot_share_or_delete_artifact_shared_with_them(client):
+    owner_id = await make_user(email="owner4@example.com", password="owner-pass")
+    owner_connection = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, owner_connection, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await make_user(email="recipient6@example.com", password="recipient-pass")
+    async with session_scope() as session:
+        await shares.share_artifact(session, owner_connection, artifact_id, "recipient6@example.com")
+
+    await _login(client, "recipient6@example.com", "recipient-pass")
+
+    detail_resp = await client.get(f"/dashboard/a/{artifact_id}")
+    assert detail_resp.status_code == 200
+    assert "Delete artifact" not in detail_resp.text
+
+    share_resp = await client.post(f"/dashboard/a/{artifact_id}/share", data={"email": "someone@example.com"})
+    assert share_resp.status_code == 404
+
+    delete_resp = await client.post(f"/dashboard/a/{artifact_id}/delete")
+    assert delete_resp.status_code == 404
+
+    async with session_scope() as session:
+        # Still there — the recipient's attempt to delete it was rejected.
+        fetched = await tools.get_artifact(session, owner_connection, artifact_id)
+    assert fetched["artifact_id"] == artifact_id
+
+
+async def test_owner_reassigns_artifact_to_another_connection(client):
+    owner_id = await make_user(email="owner6@example.com", password="owner-pass")
+    connection_a = await make_connection("laptop", user_id=owner_id)
+    connection_b = await make_connection("phone", user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_a, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await _login(client, "owner6@example.com", "owner-pass")
+
+    detail_resp = await client.get(f"/dashboard/a/{artifact_id}")
+    assert "Move to another connection" in detail_resp.text
+    assert "phone" in detail_resp.text
+
+    reassign_resp = await client.post(
+        f"/dashboard/a/{artifact_id}/reassign", data={"target_connection_id": connection_b}
+    )
+    assert reassign_resp.status_code == 303
+
+    async with session_scope() as session:
+        with pytest.raises(tools.NotFoundError):
+            await tools.get_artifact(session, connection_a, artifact_id)
+        fetched = await tools.get_artifact(session, connection_b, artifact_id)
+    assert fetched["artifact_id"] == artifact_id
+
+    list_resp = await client.get("/dashboard")
+    assert "phone" in list_resp.text
+
+
+async def test_reassign_panel_hidden_with_only_one_connection(client):
+    owner_id = await make_user(email="owner7@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+
+    await _login(client, "owner7@example.com", "owner-pass")
+
+    detail_resp = await client.get(f"/dashboard/a/{published['artifact_id']}")
+    assert "Move to another connection" not in detail_resp.text
+
+
+async def test_reassign_by_non_owner_via_dashboard_is_rejected(client):
+    owner_id = await make_user(email="owner8@example.com", password="owner-pass")
+    owner_connection = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, owner_connection, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await make_user(email="recipient7@example.com", password="recipient-pass")
+    async with session_scope() as session:
+        await shares.share_artifact(session, owner_connection, artifact_id, "recipient7@example.com")
+
+    await _login(client, "recipient7@example.com", "recipient-pass")
+    resp = await client.post(
+        f"/dashboard/a/{artifact_id}/reassign", data={"target_connection_id": "does-not-matter"}
+    )
+    assert resp.status_code == 404
+
+
+async def test_owner_deletes_artifact_from_dashboard(client):
+    owner_id = await make_user(email="owner5@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await _login(client, "owner5@example.com", "owner-pass")
+
+    delete_resp = await client.post(f"/dashboard/a/{artifact_id}/delete")
+    assert delete_resp.status_code == 303
+    assert delete_resp.headers["location"] == "/dashboard"
+
+    dashboard_resp = await client.get("/dashboard")
+    assert artifact_id not in dashboard_resp.text
+
+    async with session_scope() as session:
+        with pytest.raises(tools.NotFoundError):
+            await tools.get_artifact(session, connection_id, artifact_id)
+
+
 async def test_logout_clears_session(client):
     await make_user(email="dave@example.com", password="correct-horse")
     await _login(client, "dave@example.com", "correct-horse")

@@ -1,11 +1,13 @@
 import asyncio
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
+from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from pydantic import AnyHttpUrl
@@ -60,6 +62,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 # Mounted on the top-level app (not nested under /mcp) so paths match
 # issuer_url cleanly, and so this doesn't stack a second bearer-auth layer on

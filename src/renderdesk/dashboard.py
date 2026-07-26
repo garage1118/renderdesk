@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from mcp.server.auth.provider import construct_redirect_uri
 from sqlalchemy import delete, func, select
 
-from renderdesk import comments, shares
+from renderdesk import comments, shares, tools
 from renderdesk.auth import generate_token, hash_token
 from renderdesk.config import settings
 from renderdesk.db import session_scope
@@ -17,6 +17,7 @@ from renderdesk.models import OAuthAuthorizationCode as OAuthAuthorizationCodeRo
 from renderdesk.models import OAuthClient
 from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 from renderdesk.oauth_provider import oauth_provider
+from renderdesk.quotas import QuotaExceededError
 from renderdesk.session_auth import (
     LOGIN_PATH,
     SESSION_COOKIE_NAME,
@@ -150,17 +151,120 @@ async def dashboard_home(request: Request, user: User = Depends(require_current_
     )
 
 
-@router.get("/dashboard/a/{artifact_id}")
-async def dashboard_artifact(request: Request, artifact_id: str, user: User = Depends(require_current_user)):
+async def _artifact_context(user: User, artifact_id: str) -> dict:
     async with session_scope() as session:
         try:
             artifact = await comments.get_accessible_artifact(session, user.id, artifact_id)
         except NotFoundError:
             raise HTTPException(status_code=404) from None
         threads = await comments.list_comments_for_dashboard(session, user, artifact_id)
+        owner_connection = (
+            await session.execute(
+                select(Connection.id).where(
+                    Connection.id == artifact.connection_id, Connection.user_id == user.id
+                )
+            )
+        ).scalar_one_or_none()
+        is_owner = owner_connection is not None
+        share_list = await shares.list_shares(session, artifact_id) if is_owner else []
+        other_connections = (
+            (
+                await session.execute(
+                    select(Connection)
+                    .where(
+                        Connection.user_id == user.id,
+                        Connection.revoked_at.is_(None),
+                        Connection.id != artifact.connection_id,
+                    )
+                    .order_by(Connection.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+            if is_owner
+            else []
+        )
+    return {
+        "artifact": artifact,
+        "threads": threads,
+        "user": user,
+        "is_owner": is_owner,
+        "shares": share_list,
+        "other_connections": other_connections,
+    }
+
+
+@router.get("/dashboard/a/{artifact_id}")
+async def dashboard_artifact(request: Request, artifact_id: str, user: User = Depends(require_current_user)):
+    context = await _artifact_context(user, artifact_id)
     return templates.TemplateResponse(
-        request, "dashboard_artifact.html", {"artifact": artifact, "threads": threads, "user": user}
+        request, "dashboard_artifact.html", {**context, "share_error": None, "reassign_error": None}
     )
+
+
+@router.post("/dashboard/a/{artifact_id}/share")
+async def dashboard_share_artifact(
+    request: Request, artifact_id: str, email: str = Form(...), user: User = Depends(require_current_user)
+):
+    async with session_scope() as session:
+        try:
+            await shares.share_artifact_from_dashboard(session, user.id, artifact_id, email)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+        except (shares.RecipientNotFoundError, shares.SelfShareError) as exc:
+            context = await _artifact_context(user, artifact_id)
+            return templates.TemplateResponse(
+                request,
+                "dashboard_artifact.html",
+                {**context, "share_error": str(exc), "reassign_error": None},
+                status_code=400,
+            )
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
+
+
+@router.post("/dashboard/a/{artifact_id}/shares/{share_id}/unshare")
+async def dashboard_unshare_artifact(
+    artifact_id: str, share_id: str, user: User = Depends(require_current_user)
+):
+    async with session_scope() as session:
+        try:
+            await shares.unshare_artifact(session, user.id, artifact_id, share_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
+
+
+@router.post("/dashboard/a/{artifact_id}/reassign")
+async def dashboard_reassign_artifact(
+    request: Request,
+    artifact_id: str,
+    target_connection_id: str = Form(...),
+    user: User = Depends(require_current_user),
+):
+    async with session_scope() as session:
+        try:
+            await tools.reassign_artifact_connection(session, user.id, artifact_id, target_connection_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+        except (tools.InvalidTargetConnectionError, QuotaExceededError) as exc:
+            context = await _artifact_context(user, artifact_id)
+            return templates.TemplateResponse(
+                request,
+                "dashboard_artifact.html",
+                {**context, "share_error": None, "reassign_error": str(exc)},
+                status_code=400,
+            )
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
+
+
+@router.post("/dashboard/a/{artifact_id}/delete")
+async def dashboard_delete_artifact(artifact_id: str, user: User = Depends(require_current_user)):
+    async with session_scope() as session:
+        try:
+            await tools.delete_artifact(session, user.id, artifact_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 
 @router.post("/dashboard/a/{artifact_id}/comments")
@@ -272,8 +376,9 @@ async def dashboard_delete_connection(request: Request, connection_id: str, user
             raise HTTPException(status_code=400, detail="Only revoked connections can be deleted")
 
         # A connection is never deleted out from under content it published —
-        # renderdesk has no artifact-deletion capability at all (a deliberate
-        # Stage 1 choice), so this holds that same line for connections too.
+        # if the owner wants that content gone too, deleting the artifacts
+        # themselves (see dashboard_delete_artifact) is the explicit way to
+        # do it, rather than an implicit side effect of cleaning up a token.
         artifact_count = (
             await session.execute(select(func.count()).select_from(Artifact).where(Artifact.connection_id == connection_id))
         ).scalar_one()
