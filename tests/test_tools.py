@@ -2,11 +2,12 @@ import uuid
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from renderdesk import shares, tools
 from renderdesk.config import settings
 from renderdesk.db import session_scope
-from renderdesk.models import ArtifactShare, ArtifactVersion, Comment, Connection
+from renderdesk.models import ArtifactFormat, ArtifactShare, ArtifactVersion, Comment, Connection
 from renderdesk.quotas import QuotaExceededError
 
 from .conftest import make_connection, make_user
@@ -136,6 +137,38 @@ async def test_publish_code_artifact_with_language_round_trips():
     async with session_scope() as session:
         listing = await tools.list_artifacts(session, connection_id)
     assert listing[0]["language"] == "python"
+
+
+async def test_list_artifacts_offset_pages_through_results():
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        for title in ["first", "second", "third"]:
+            await tools.publish_artifact(session, connection_id, "x", "markdown", title)
+
+    async with session_scope() as session:
+        page1 = await tools.list_artifacts(session, connection_id, limit=2, offset=0)
+        page2 = await tools.list_artifacts(session, connection_id, limit=2, offset=2)
+
+    assert [a["title"] for a in page1] == ["third", "second"]
+    assert [a["title"] for a in page2] == ["first"]
+
+
+async def test_artifact_version_rejects_duplicate_version_number():
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+
+    async with session_scope() as session:
+        session.add(
+            ArtifactVersion(
+                artifact_id=published["artifact_id"],
+                version=1,
+                content="duplicate",
+                format=ArtifactFormat.markdown,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
 
 
 async def test_update_code_artifact_can_change_language():

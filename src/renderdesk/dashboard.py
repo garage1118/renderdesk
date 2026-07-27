@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select
 from renderdesk import comments, shares, tools
 from renderdesk.auth import generate_token, hash_token
 from renderdesk.config import settings
+from renderdesk.csrf import verify_csrf
 from renderdesk.db import session_scope
 from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, User, utcnow
 from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
@@ -21,8 +22,11 @@ from renderdesk.quotas import QuotaExceededError
 from renderdesk.session_auth import (
     LOGIN_PATH,
     SESSION_COOKIE_NAME,
+    clear_failed_logins,
     create_session,
     delete_session,
+    is_login_rate_limited,
+    record_failed_login,
     require_current_user,
     safe_next_path,
     verify_password,
@@ -32,6 +36,11 @@ from renderdesk.tools import NotFoundError
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Lets every template embed the current request's CSRF token via
+# {{ csrf_token(request) }} without every TemplateResponse call needing to
+# pass it through its context dict explicitly — `request` is already
+# auto-injected into the Jinja context by TemplateResponse(request, ...).
+templates.env.globals["csrf_token"] = lambda request: request.state.csrf_token
 
 # Only mark the cookie Secure when we're actually serving https — otherwise a
 # browser (correctly) refuses to send it back, breaking login over plain
@@ -44,16 +53,26 @@ async def login_form(request: Request, next: str = "/dashboard"):
     return templates.TemplateResponse(request, "login.html", {"error": None, "next": next})
 
 
-@router.post(LOGIN_PATH)
+@router.post(LOGIN_PATH, dependencies=[Depends(verify_csrf)])
 async def login_submit(
     request: Request, email: str = Form(...), password: str = Form(...), next: str = Form("/dashboard")
 ):
+    if is_login_rate_limited(email):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Too many failed attempts. Try again in a few minutes.", "next": next},
+            status_code=429,
+        )
+
     async with session_scope() as session:
         user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if user is None or not verify_password(user, password):
+            record_failed_login(email)
             return templates.TemplateResponse(
                 request, "login.html", {"error": "Invalid email or password", "next": next}, status_code=401
             )
+        clear_failed_logins(email)
         token = await create_session(session, user)
 
     response = RedirectResponse(url=safe_next_path(next), status_code=303)
@@ -68,7 +87,7 @@ async def login_submit(
     return response
 
 
-@router.post("/dashboard/logout")
+@router.post("/dashboard/logout", dependencies=[Depends(verify_csrf)])
 async def logout(request: Request):
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if token:
@@ -98,7 +117,7 @@ async def oauth_consent_form(request: Request, request_id: str, user: User = Dep
     )
 
 
-@router.post("/oauth/consent")
+@router.post("/oauth/consent", dependencies=[Depends(verify_csrf)])
 async def oauth_consent_submit(
     request_id: str = Form(...), action: str = Form(...), user: User = Depends(require_current_user)
 ):
@@ -166,7 +185,7 @@ async def _artifact_context(user: User, artifact_id: str) -> dict:
             )
         ).scalar_one_or_none()
         is_owner = owner_connection is not None
-        share_list = await shares.list_shares(session, artifact_id) if is_owner else []
+        share_list = await shares.list_shares(session, user.id, artifact_id) if is_owner else []
         other_connections = (
             (
                 await session.execute(
@@ -202,7 +221,7 @@ async def dashboard_artifact(request: Request, artifact_id: str, user: User = De
     )
 
 
-@router.post("/dashboard/a/{artifact_id}/share")
+@router.post("/dashboard/a/{artifact_id}/share", dependencies=[Depends(verify_csrf)])
 async def dashboard_share_artifact(
     request: Request, artifact_id: str, email: str = Form(...), user: User = Depends(require_current_user)
 ):
@@ -222,7 +241,7 @@ async def dashboard_share_artifact(
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
-@router.post("/dashboard/a/{artifact_id}/shares/{share_id}/unshare")
+@router.post("/dashboard/a/{artifact_id}/shares/{share_id}/unshare", dependencies=[Depends(verify_csrf)])
 async def dashboard_unshare_artifact(
     artifact_id: str, share_id: str, user: User = Depends(require_current_user)
 ):
@@ -234,7 +253,7 @@ async def dashboard_unshare_artifact(
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
-@router.post("/dashboard/a/{artifact_id}/reassign")
+@router.post("/dashboard/a/{artifact_id}/reassign", dependencies=[Depends(verify_csrf)])
 async def dashboard_reassign_artifact(
     request: Request,
     artifact_id: str,
@@ -257,7 +276,7 @@ async def dashboard_reassign_artifact(
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
-@router.post("/dashboard/a/{artifact_id}/delete")
+@router.post("/dashboard/a/{artifact_id}/delete", dependencies=[Depends(verify_csrf)])
 async def dashboard_delete_artifact(artifact_id: str, user: User = Depends(require_current_user)):
     async with session_scope() as session:
         try:
@@ -267,17 +286,19 @@ async def dashboard_delete_artifact(artifact_id: str, user: User = Depends(requi
     return RedirectResponse(url="/dashboard", status_code=303)
 
 
-@router.post("/dashboard/a/{artifact_id}/comments")
+@router.post("/dashboard/a/{artifact_id}/comments", dependencies=[Depends(verify_csrf)])
 async def dashboard_new_comment(artifact_id: str, body: str = Form(...), user: User = Depends(require_current_user)):
     async with session_scope() as session:
         try:
             await comments.create_comment(session, user, artifact_id, body)
         except NotFoundError:
             raise HTTPException(status_code=404) from None
+        except comments.CommentTooLargeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
-@router.post("/dashboard/comments/{comment_id}/reply")
+@router.post("/dashboard/comments/{comment_id}/reply", dependencies=[Depends(verify_csrf)])
 async def dashboard_reply(
     comment_id: str,
     artifact_id: str = Form(...),
@@ -289,10 +310,12 @@ async def dashboard_reply(
             await comments.reply_as_human(session, user, comment_id, body)
         except NotFoundError:
             raise HTTPException(status_code=404) from None
+        except comments.CommentTooLargeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
-@router.post("/dashboard/comments/{comment_id}/resolve")
+@router.post("/dashboard/comments/{comment_id}/resolve", dependencies=[Depends(verify_csrf)])
 async def dashboard_resolve(
     comment_id: str, artifact_id: str = Form(...), user: User = Depends(require_current_user)
 ):
@@ -336,7 +359,7 @@ async def dashboard_connections(request: Request, user: User = Depends(require_c
     return templates.TemplateResponse(request, "dashboard_connections.html", {**context, "error": None})
 
 
-@router.post("/dashboard/connections/tokens")
+@router.post("/dashboard/connections/tokens", dependencies=[Depends(verify_csrf)])
 async def dashboard_create_token(
     request: Request, label: str = Form(None), user: User = Depends(require_current_user)
 ):
@@ -345,7 +368,7 @@ async def dashboard_create_token(
     return templates.TemplateResponse(request, "dashboard_token_created.html", {"token": token, "user": user})
 
 
-@router.post("/dashboard/connections/{connection_id}/revoke")
+@router.post("/dashboard/connections/{connection_id}/revoke", dependencies=[Depends(verify_csrf)])
 async def dashboard_revoke_connection(connection_id: str, user: User = Depends(require_current_user)):
     async with session_scope() as session:
         connection = (
@@ -362,7 +385,7 @@ async def dashboard_revoke_connection(connection_id: str, user: User = Depends(r
     return RedirectResponse(url="/dashboard/connections", status_code=303)
 
 
-@router.post("/dashboard/connections/{connection_id}/delete")
+@router.post("/dashboard/connections/{connection_id}/delete", dependencies=[Depends(verify_csrf)])
 async def dashboard_delete_connection(request: Request, connection_id: str, user: User = Depends(require_current_user)):
     async with session_scope() as session:
         connection = (

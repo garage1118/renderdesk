@@ -1,5 +1,5 @@
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 import bcrypt
@@ -14,6 +14,32 @@ from renderdesk.models import Session, User, utcnow
 
 SESSION_COOKIE_NAME = "renderdesk_session"
 LOGIN_PATH = "/dashboard/login"
+
+# In-memory fixed-window lockout, keyed by the attempted email — good enough
+# for a single-process deploy (see Dockerfile: one uvicorn worker, no
+# multi-process fan-out) without pulling in a rate-limiting dependency or
+# persisting attempt history across restarts.
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_WINDOW = timedelta(minutes=15)
+_failed_logins: dict[str, list[datetime]] = {}
+
+
+def is_login_rate_limited(email: str) -> bool:
+    cutoff = utcnow() - _LOGIN_LOCKOUT_WINDOW
+    attempts = [t for t in _failed_logins.get(email, []) if t > cutoff]
+    if attempts:
+        _failed_logins[email] = attempts
+    else:
+        _failed_logins.pop(email, None)
+    return len(attempts) >= _LOGIN_MAX_ATTEMPTS
+
+
+def record_failed_login(email: str) -> None:
+    _failed_logins.setdefault(email, []).append(utcnow())
+
+
+def clear_failed_logins(email: str) -> None:
+    _failed_logins.pop(email, None)
 
 
 def verify_password(user: User, password: str) -> bool:
@@ -38,7 +64,13 @@ async def resolve_session(db_session: AsyncSession, token: str) -> User | None:
     token_hash = hash_token(token)
     result = await db_session.execute(select(Session).where(Session.token_hash == token_hash))
     session_row = result.scalar_one_or_none()
-    if session_row is None or session_row.expires_at <= utcnow():
+    if session_row is None:
+        return None
+    if session_row.expires_at <= utcnow():
+        # Opportunistic cleanup — since we're already here looking it up,
+        # delete it now rather than letting expired rows accumulate forever.
+        await db_session.delete(session_row)
+        await db_session.commit()
         return None
 
     user_result = await db_session.execute(select(User).where(User.id == session_row.user_id))
@@ -57,8 +89,10 @@ async def delete_session(db_session: AsyncSession, token: str) -> None:
 def safe_next_path(path: str) -> str:
     # Only ever redirect back to a same-site relative path — a `next` value
     # like "//evil.com" or "https://evil.com" would otherwise be an open
-    # redirect off the login page.
-    if path.startswith("/") and not path.startswith("//"):
+    # redirect off the login page. all(c.isprintable()...) is defense in
+    # depth against embedded CRLF/control characters reaching a Location
+    # header, on top of whatever Starlette already rejects.
+    if path.startswith("/") and not path.startswith("//") and all(c.isprintable() for c in path):
         return path
     return "/dashboard"
 

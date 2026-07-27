@@ -1,3 +1,6 @@
+import asyncio
+from collections import defaultdict
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +10,27 @@ from renderdesk.models import Artifact
 
 class QuotaExceededError(Exception):
     pass
+
+
+# Guards the read-check-then-write sequence in publish_artifact/
+# update_artifact/reassign_artifact_connection against two concurrent
+# requests for the *same* connection both passing a quota check before
+# either has committed. SQLite's own transaction locking doesn't close this
+# window on its own: the quota read happens in a plain SELECT, which
+# doesn't block a second concurrent SELECT from also seeing pre-update
+# counts before the first request's write commits.
+#
+# Keyed by connection_id (not a single global lock) so unrelated
+# connections/users still run fully in parallel — only two requests
+# racing for the *same* connection's quota ever wait on each other. This
+# is process-local: correct for this app's single uvicorn worker (see
+# Dockerfile), but wouldn't coordinate across multiple worker processes if
+# this were ever scaled out horizontally.
+_connection_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def quota_lock(connection_id: str) -> asyncio.Lock:
+    return _connection_locks[connection_id]
 
 
 async def check_new_artifact_quota(session: AsyncSession, connection_id: str, byte_size: int) -> None:

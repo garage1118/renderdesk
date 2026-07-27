@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from renderdesk.models import Artifact, ArtifactShare, Connection, User
@@ -43,7 +44,14 @@ async def _create_share(
             shared_by_connection_id=shared_by_connection_id,
         )
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent request won the race and inserted the same
+        # (artifact_id, shared_with_user_id) pair first — same outcome as
+        # the existing-share check above finding it, not an error.
+        await session.rollback()
+        return {"shared_with": email, "already_shared": True}
     return {"shared_with": email, "already_shared": False}
 
 
@@ -69,7 +77,11 @@ async def share_artifact_from_dashboard(session: AsyncSession, user_id: str, art
     return await _create_share(session, artifact, user_id, artifact.connection_id, email)
 
 
-async def list_shares(session: AsyncSession, artifact_id: str) -> list[dict]:
+async def list_shares(session: AsyncSession, owner_user_id: str, artifact_id: str) -> list[dict]:
+    # Ownership isn't implied by the query below (it has no owner filter at
+    # all) — enforce it here so this function is safe to call on its own,
+    # not just from call sites that happen to gate it externally.
+    await get_owned_artifact_by_user(session, owner_user_id, artifact_id)
     rows = (
         await session.execute(
             select(ArtifactShare, User.email)

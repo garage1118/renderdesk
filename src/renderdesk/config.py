@@ -5,7 +5,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RENDERDESK_", env_file=".env")
 
     database_path: str = "./data/renderdesk.db"
-    public_base_url: str = "http://localhost:8000"
+    # No default: this seeds every self-referencing URL the app generates
+    # (artifact links, OAuth issuer/redirect URIs). A silent localhost
+    # fallback in production would produce links that work for no one —
+    # better to fail loudly at startup if it's unset.
+    public_base_url: str
     token_expiry_days: int = 90
 
     max_artifacts_per_connection: int = 200

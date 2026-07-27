@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <title>renderdesk — connections</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
@@ -12,6 +13,7 @@
   {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
 
   <form method="post" action="/dashboard/connections/tokens" class="field-row" style="margin-bottom:2rem;max-width:480px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="text" name="label" placeholder="Label (e.g. laptop, opencode)">
     <button type="submit" class="btn btn-primary" style="white-space:nowrap">Create token</button>
   </form>
@@ -28,11 +30,13 @@
       <td>
         {% if not row.connection.revoked_at %}
         <form method="post" action="/dashboard/connections/{{ row.connection.id }}/revoke">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
           <button type="submit" class="btn btn-sm">Revoke</button>
         </form>
         {% else %}
         <form method="post" action="/dashboard/connections/{{ row.connection.id }}/delete"
               onsubmit="return confirm('Permanently delete this connection? This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
           <button type="submit" class="btn btn-danger btn-sm">Delete</button>
         </form>
         {% endif %}
@@ -44,3 +48,4 @@
   <div class="empty-state">No connections yet.</div>
   {% endif %}
 </main>
+</html>

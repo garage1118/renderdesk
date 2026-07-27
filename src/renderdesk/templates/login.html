@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <title>renderdesk — log in</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
@@ -8,8 +9,10 @@
     <h1>Log in</h1>
     {% if error %}<p class="error-text">{{ error }}</p>{% endif %}
     <input type="hidden" name="next" value="{{ next }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="email" name="email" placeholder="Email" required autofocus>
     <input type="password" name="password" placeholder="Password" required>
     <button type="submit" class="btn btn-primary">Log in</button>
   </form>
 </div>
+</html>

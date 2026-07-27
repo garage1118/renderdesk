@@ -6,6 +6,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, User
 from renderdesk.tools import NotFoundError, get_owned_artifact
 
+MAX_COMMENT_BYTES = 100_000
+
+
+class CommentTooLargeError(Exception):
+    pass
+
+
+def _check_body_size(body: str) -> None:
+    if len(body.encode()) > MAX_COMMENT_BYTES:
+        raise CommentTooLargeError(f"invalid: comment body exceeds {MAX_COMMENT_BYTES} bytes")
+
 
 def _serialize_comment(comment: Comment) -> dict:
     return {
@@ -25,6 +36,32 @@ async def _serialize_thread(session: AsyncSession, root: Comment) -> dict:
         "resolved": root.resolved,
         "comments": [_serialize_comment(root)] + [_serialize_comment(r) for r in replies],
     }
+
+
+async def _serialize_threads(session: AsyncSession, roots: list[Comment]) -> list[dict]:
+    """Batch version of _serialize_thread for listing many threads at once —
+    one query for all replies instead of one per root."""
+    if not roots:
+        return []
+    all_replies = (
+        await session.execute(
+            select(Comment)
+            .where(Comment.parent_id.in_([root.id for root in roots]))
+            .order_by(Comment.created_at)
+        )
+    ).scalars().all()
+    replies_by_root: dict[str, list[Comment]] = {}
+    for reply in all_replies:
+        replies_by_root.setdefault(reply.parent_id, []).append(reply)
+    return [
+        {
+            "thread_id": root.id,
+            "resolved": root.resolved,
+            "comments": [_serialize_comment(root)]
+            + [_serialize_comment(r) for r in replies_by_root.get(root.id, [])],
+        }
+        for root in roots
+    ]
 
 
 # --- MCP-facing: ownership checked via the calling connection ---------------
@@ -55,10 +92,11 @@ async def list_comments(
         query = query.where(Comment.resolved.is_(False))
     roots = (await session.execute(query.order_by(Comment.created_at))).scalars().all()
 
-    return [await _serialize_thread(session, root) for root in roots]
+    return await _serialize_threads(session, roots)
 
 
 async def reply_to_comment(session: AsyncSession, connection_id: str, comment_id: str, body: str) -> dict:
+    _check_body_size(body)
     root = await _get_connection_owned_thread_root(session, connection_id, comment_id)
     reply = Comment(
         id=str(uuid.uuid4()),
@@ -130,10 +168,11 @@ async def list_comments_for_dashboard(session: AsyncSession, user: User, artifac
             .order_by(Comment.created_at)
         )
     ).scalars().all()
-    return [await _serialize_thread(session, root) for root in roots]
+    return await _serialize_threads(session, roots)
 
 
 async def create_comment(session: AsyncSession, user: User, artifact_id: str, body: str) -> dict:
+    _check_body_size(body)
     await get_accessible_artifact(session, user.id, artifact_id)
     root = Comment(id=str(uuid.uuid4()), artifact_id=artifact_id, author_user_id=user.id, body=body)
     session.add(root)
@@ -142,6 +181,7 @@ async def create_comment(session: AsyncSession, user: User, artifact_id: str, bo
 
 
 async def reply_as_human(session: AsyncSession, user: User, comment_id: str, body: str) -> dict:
+    _check_body_size(body)
     root = await _get_accessible_thread_root(session, user.id, comment_id)
     reply = Comment(
         id=str(uuid.uuid4()), artifact_id=root.artifact_id, parent_id=root.id, author_user_id=user.id, body=body

@@ -31,6 +31,9 @@ async def test_html_artifact_served_byte_for_byte_with_csp(client):
     assert page_resp.status_code == 200
     assert "iframe" in page_resp.text
     assert f"/a/{published['artifact_id']}/raw" in page_resp.text
+    # This wrapper page is the one place that actually embeds an iframe of
+    # its own /raw content, so it's the one place frame-src 'self' belongs.
+    assert "frame-src 'self'" in page_resp.headers["content-security-policy"]
 
 
 async def test_markdown_artifact_is_sanitized(client):
@@ -63,9 +66,15 @@ async def test_code_artifact_is_syntax_highlighted(client):
     assert '<span class="k">def</span>' in resp.text
     assert ".codehilite{" in resp.text
     # Static, server-side only — strictest CSP baseline, no loosening at all.
-    assert resp.headers["content-security-policy"] == (
-        "default-src 'none'; frame-src 'self'; style-src 'unsafe-inline'; img-src data: blob:"
-    )
+    # Checked directive-by-directive (not an exact string) since this page
+    # never embeds an iframe, unlike the plain-HTML wrapper page, so it
+    # shouldn't need frame-src at all.
+    csp = resp.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
+    assert "style-src 'unsafe-inline'" in csp
+    assert "img-src data: blob:" in csp
+    assert "frame-src" not in csp
+    assert "script-src" not in csp
 
     raw_resp = await client.get(f"/a/{published['artifact_id']}/raw")
     assert raw_resp.status_code == 200
@@ -304,8 +313,16 @@ async def test_html_artifact_without_mermaid_class_is_unaffected(client):
     assert resp.status_code == 200
     assert resp.text == html  # untouched, byte-for-byte
     assert "mermaid" not in resp.text
-    assert resp.headers["content-security-policy"] == (
-        "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; "
-        "img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; "
-        "object-src 'none'; frame-ancestors 'self'"
-    )
+    # Directive-by-directive rather than an exact string, so adding an
+    # unrelated directive elsewhere doesn't break this assertion.
+    csp = resp.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
+    assert "sandbox allow-scripts" in csp
+    assert "script-src 'unsafe-inline' 'unsafe-eval'" in csp
+    assert "style-src 'unsafe-inline'" in csp
+    assert "img-src data: blob:" in csp
+    assert "font-src data:" in csp
+    assert "connect-src 'none'" in csp
+    assert "frame-src 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'self'" in csp

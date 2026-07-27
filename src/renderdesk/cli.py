@@ -1,4 +1,5 @@
 import asyncio
+import re
 import uuid
 
 import bcrypt
@@ -8,6 +9,16 @@ from sqlalchemy import select
 from renderdesk.db import session_scope
 from renderdesk.models import User, utcnow
 from renderdesk.tokens import create_personal_token
+
+# Deliberately loose — just enough to catch obvious typos ("not-an-email"),
+# not full RFC 5322 compliance. There's no signup flow to protect; accounts
+# are only ever created out-of-band by whoever runs this CLI.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_email(email: str) -> None:
+    if not _EMAIL_RE.match(email):
+        raise click.ClickException(f"{email!r} doesn't look like a valid email address")
 
 
 async def _create_user(email: str, password: str) -> None:
@@ -38,7 +49,10 @@ def main() -> None:
 @click.option("--email", required=True, help="Email to log into the web dashboard with")
 def create_user(email: str) -> None:
     """Create a human user who can log into the web dashboard."""
+    _validate_email(email)
     password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    if len(password) < 8:
+        raise click.ClickException("password must be at least 8 characters")
     asyncio.run(_create_user(email, password))
     click.echo(f"Created user {email}")
 

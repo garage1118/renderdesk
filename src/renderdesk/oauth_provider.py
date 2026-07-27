@@ -1,4 +1,6 @@
+import asyncio
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.auth.provider import (
@@ -23,6 +25,14 @@ from renderdesk.models import utcnow
 
 ACCESS_TOKEN_TTL = timedelta(hours=1)
 REFRESH_TOKEN_TTL = timedelta(days=180)
+
+# Guards _get_or_create_connection's SELECT-then-INSERT against two
+# concurrent token exchanges for the same (user_id, client_id) both seeing
+# no existing active connection and both creating one. Same process-local
+# per-key locking approach as quotas.quota_lock, for the same reason
+# (SQLite's own locking doesn't close a read-then-write race across two
+# separate transactions).
+_connection_creation_locks: dict[tuple[str | None, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 AUTHORIZATION_CODE_TTL = timedelta(minutes=10)
 
 
@@ -124,30 +134,31 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
         return await self._issue_tokens(connection_id, client.client_id, authorization_code.scopes)
 
     async def _get_or_create_connection(self, user_id: str | None, client_id: str) -> str:
-        async with session_scope() as session:
-            existing = (
-                await session.execute(
-                    select(Connection).where(
-                        Connection.user_id == user_id,
-                        Connection.client_id == client_id,
-                        Connection.revoked_at.is_(None),
+        async with _connection_creation_locks[(user_id, client_id)]:
+            async with session_scope() as session:
+                existing = (
+                    await session.execute(
+                        select(Connection).where(
+                            Connection.user_id == user_id,
+                            Connection.client_id == client_id,
+                            Connection.revoked_at.is_(None),
+                        )
                     )
+                ).scalar_one_or_none()
+                if existing is not None:
+                    return existing.id
+
+                oauth_client_row = (
+                    await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+                ).scalar_one()
+                client_name = oauth_client_row.metadata_json.get("client_name") or f"OAuth client {client_id[:8]}"
+
+                connection = Connection(
+                    id=str(uuid.uuid4()), user_id=user_id, client_id=client_id, label=client_name
                 )
-            ).scalar_one_or_none()
-            if existing is not None:
-                return existing.id
-
-            oauth_client_row = (
-                await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
-            ).scalar_one()
-            client_name = oauth_client_row.metadata_json.get("client_name") or f"OAuth client {client_id[:8]}"
-
-            connection = Connection(
-                id=str(uuid.uuid4()), user_id=user_id, client_id=client_id, label=client_name
-            )
-            session.add(connection)
-            await session.commit()
-            return connection.id
+                session.add(connection)
+                await session.commit()
+                return connection.id
 
     async def _issue_tokens(self, connection_id: str, client_id: str, scopes: list[str]) -> OAuthToken:
         access_token = generate_token()

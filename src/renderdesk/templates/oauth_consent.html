@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <title>renderdesk — authorize {{ client_name }}</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
@@ -10,6 +11,7 @@
       behalf{% if scope %} (scope: {{ scope }}){% endif %}.</p>
     <form method="post" action="/oauth/consent">
       <input type="hidden" name="request_id" value="{{ request_id }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <div class="field-row" style="margin-top:0.5rem">
         <button type="submit" name="action" value="deny" class="btn btn-block">Deny</button>
         <button type="submit" name="action" value="approve" class="btn btn-primary btn-block">Approve</button>
@@ -17,3 +19,4 @@
     </form>
   </div>
 </div>
+</html>

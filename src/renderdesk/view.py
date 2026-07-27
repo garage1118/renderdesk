@@ -23,6 +23,13 @@ router = APIRouter()
 
 _HTML_CSP = (
     "default-src 'none'; "
+    # Without this, a link straight to /a/{id}/raw (bypassing the sandboxed
+    # iframe in view_artifact) would run artifact JS as a normal top-level
+    # document in our real origin, with access to cookies and same-origin
+    # requests. The CSP sandbox directive forces the same opaque-origin,
+    # no-cookie-access restrictions here as the iframe's sandbox="allow-scripts"
+    # attribute already applies when this is loaded embedded.
+    "sandbox allow-scripts; "
     "script-src 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'unsafe-inline'; "
     "img-src data: blob:; "
@@ -70,7 +77,7 @@ def _page_csp(has_mermaid: bool, has_math: bool) -> str:
     # loosened for the specific same-origin vendored asset that needs it,
     # never an external CDN.
     style_src = "'unsafe-inline'" + (" 'self'" if has_math else "")  # 'self' for the vendored katex.min.css link
-    parts = ["default-src 'none'", "frame-src 'self'", f"style-src {style_src}", "img-src data: blob:"]
+    parts = ["default-src 'none'", f"style-src {style_src}", "img-src data: blob:"]
     if has_mermaid or has_math:
         parts.append("script-src 'self'")
     if has_math:
@@ -221,19 +228,25 @@ async def view_artifact(artifact_id: str) -> Response:
             style = ""
 
         title = html_escape.escape(artifact.title or "Untitled")
+        safe_id = html_escape.escape(artifact_id)
         body = (
             f"<!doctype html><title>{title}</title>{style}"
-            f'<body><p><a href="/a/{artifact_id}/raw">View raw</a></p>{code_html}</body>'
+            f'<body><p><a href="/a/{safe_id}/raw">View raw</a></p>{code_html}</body>'
         )
         return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
 
     title = html_escape.escape(artifact.title or "Untitled")
+    safe_id = html_escape.escape(artifact_id)
     page = (
         f"<!doctype html><title>{title}</title>"
         "<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style>"
-        f'<iframe sandbox="allow-scripts" src="/a/{artifact_id}/raw"></iframe>'
+        f'<iframe sandbox="allow-scripts" src="/a/{safe_id}/raw"></iframe>'
     )
-    return Response(content=page, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
+    # frame-src 'self' is only needed here, to embed the same-origin /raw
+    # iframe above — the markdown/code branches above never embed an
+    # iframe, so _PAGE_CSP itself stays as tight as possible for them.
+    csp = _PAGE_CSP + "; frame-src 'self'"
+    return Response(content=page, media_type="text/html", headers={"Content-Security-Policy": csp})
 
 
 @router.get("/a/{artifact_id}/raw")

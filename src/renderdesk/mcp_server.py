@@ -68,11 +68,12 @@ async def get_artifact(artifact_id: str, include_content: bool = False) -> dict:
 
 
 @mcp.tool()
-async def list_artifacts(limit: int = 50) -> list[dict]:
-    """List artifacts you've published, most recently updated first."""
+async def list_artifacts(limit: int = 50, offset: int = 0) -> list[dict]:
+    """List artifacts you've published, most recently updated first. Use offset
+    to page through results beyond the first `limit`."""
     connection_id = get_current_connection_id()
     async with session_scope() as session:
-        return await tools.list_artifacts(session, connection_id, limit)
+        return await tools.list_artifacts(session, connection_id, limit, offset)
 
 
 @mcp.tool()

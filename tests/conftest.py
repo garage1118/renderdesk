@@ -1,7 +1,13 @@
+import atexit
 import os
+import shutil
 import tempfile
 
+# Has to exist before Settings is constructed (RENDERDESK_DATABASE_PATH is
+# read at import time), so this can't wait for a fixture — cleaned up via
+# atexit instead of a fixture teardown for the same reason.
 _tmpdir = tempfile.mkdtemp()
+atexit.register(shutil.rmtree, _tmpdir, ignore_errors=True)
 os.environ.setdefault("RENDERDESK_DATABASE_PATH", os.path.join(_tmpdir, "test.db"))
 os.environ.setdefault("RENDERDESK_PUBLIC_BASE_URL", "http://localhost:8000")
 
@@ -15,6 +21,7 @@ from renderdesk.auth import hash_token
 from renderdesk.config import settings
 from renderdesk.db import Base, engine, session_scope
 from renderdesk.models import Connection, User, utcnow
+from renderdesk.session_auth import _failed_logins
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +29,15 @@ async def _reset_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_login_rate_limit():
+    # The login lockout tracker is in-process module state (see
+    # session_auth.py), not DB-backed — clear it between tests so one test's
+    # failed logins can't lock out an email reused by another.
+    _failed_logins.clear()
     yield
 
 

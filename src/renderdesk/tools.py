@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from renderdesk.config import settings
 from renderdesk.models import Artifact, ArtifactFormat, ArtifactShare, ArtifactVersion, Comment, Connection
-from renderdesk.quotas import check_new_artifact_quota, check_update_quota
+from renderdesk.quotas import QuotaExceededError, check_new_artifact_quota, check_update_quota, quota_lock
 
 
 class NotFoundError(Exception):
@@ -98,10 +98,13 @@ async def reassign_artifact_connection(
 
     # Treat the move like publishing a byte_size-sized artifact onto the
     # target, so reassignment can't be used to bypass per-connection quotas.
-    await check_new_artifact_quota(session, target_connection_id, artifact.byte_size)
-
-    artifact.connection_id = target_connection_id
-    await session.commit()
+    # Locked on the *target* connection — it's the one whose quota this
+    # check protects, and it's what a concurrent publish/update/reassign
+    # onto that same connection would also lock on.
+    async with quota_lock(target_connection_id):
+        await check_new_artifact_quota(session, target_connection_id, artifact.byte_size)
+        artifact.connection_id = target_connection_id
+        await session.commit()
     return {"artifact_id": artifact.id, "connection_id": target_connection_id}
 
 
@@ -114,32 +117,41 @@ async def publish_artifact(
     language: str | None = None,
 ) -> dict:
     parsed_format = _parse_format(format)
+    # UTF-8 encoding never shrinks a string, so this character-count check
+    # is a safe, cheap upper bound that rejects oversized content before
+    # ever materializing the (potentially much larger) encoded bytes.
+    if len(content) > settings.max_bytes_per_artifact:
+        raise QuotaExceededError(
+            f"quota_exceeded: artifact exceeds {settings.max_bytes_per_artifact} bytes per artifact"
+        )
     byte_size = len(content.encode())
-    await check_new_artifact_quota(session, connection_id, byte_size)
 
-    artifact_id = str(uuid.uuid4())
-    artifact = Artifact(
-        id=artifact_id,
-        connection_id=connection_id,
-        title=title,
-        format=parsed_format,
-        language=language,
-        content=content,
-        version=1,
-        byte_size=byte_size,
-    )
-    session.add(artifact)
-    session.add(
-        ArtifactVersion(
-            artifact_id=artifact_id,
-            version=1,
-            content=content,
+    async with quota_lock(connection_id):
+        await check_new_artifact_quota(session, connection_id, byte_size)
+
+        artifact_id = str(uuid.uuid4())
+        artifact = Artifact(
+            id=artifact_id,
+            connection_id=connection_id,
+            title=title,
             format=parsed_format,
             language=language,
-            title=title,
+            content=content,
+            version=1,
+            byte_size=byte_size,
         )
-    )
-    await session.commit()
+        session.add(artifact)
+        session.add(
+            ArtifactVersion(
+                artifact_id=artifact_id,
+                version=1,
+                content=content,
+                format=parsed_format,
+                language=language,
+                title=title,
+            )
+        )
+        await session.commit()
 
     return {"artifact_id": artifact_id, "version": 1, "url": _artifact_url(artifact_id)}
 
@@ -154,37 +166,48 @@ async def update_artifact(
     title: str | None = None,
     language: str | None = None,
 ) -> dict:
-    artifact = await get_owned_artifact(session, connection_id, artifact_id)
-
-    if artifact.version != base_version:
-        raise VersionConflictError(
-            f"version_conflict: base_version {base_version} is stale, current version is {artifact.version}"
+    if len(content) > settings.max_bytes_per_artifact:
+        raise QuotaExceededError(
+            f"quota_exceeded: artifact exceeds {settings.max_bytes_per_artifact} bytes per artifact"
         )
-
-    new_format = _parse_format(format) if format is not None else artifact.format
     byte_size = len(content.encode())
-    await check_update_quota(session, connection_id, artifact_id, artifact.byte_size, byte_size)
 
-    artifact.content = content
-    artifact.format = new_format
-    artifact.byte_size = byte_size
-    if title is not None:
-        artifact.title = title
-    if language is not None:
-        artifact.language = language
-    artifact.version += 1
+    # Locked from the version check through the commit: besides closing the
+    # same quota TOCTOU as publish_artifact, this also makes the
+    # base_version optimistic-concurrency check race-free — two concurrent
+    # updates against the same artifact can no longer both read the same
+    # current version and both "win".
+    async with quota_lock(connection_id):
+        artifact = await get_owned_artifact(session, connection_id, artifact_id)
 
-    session.add(
-        ArtifactVersion(
-            artifact_id=artifact_id,
-            version=artifact.version,
-            content=content,
-            format=new_format,
-            language=artifact.language,
-            title=artifact.title,
+        if artifact.version != base_version:
+            raise VersionConflictError(
+                f"version_conflict: base_version {base_version} is stale, current version is {artifact.version}"
+            )
+
+        new_format = _parse_format(format) if format is not None else artifact.format
+        await check_update_quota(session, connection_id, artifact_id, artifact.byte_size, byte_size)
+
+        artifact.content = content
+        artifact.format = new_format
+        artifact.byte_size = byte_size
+        if title is not None:
+            artifact.title = title
+        if language is not None:
+            artifact.language = language
+        artifact.version += 1
+
+        session.add(
+            ArtifactVersion(
+                artifact_id=artifact_id,
+                version=artifact.version,
+                content=content,
+                format=new_format,
+                language=artifact.language,
+                title=artifact.title,
+            )
         )
-    )
-    await session.commit()
+        await session.commit()
 
     return {"version": artifact.version, "url": _artifact_url(artifact_id)}
 
@@ -213,12 +236,15 @@ async def get_artifact(
     return result
 
 
-async def list_artifacts(session: AsyncSession, connection_id: str, limit: int = 50) -> list[dict]:
+async def list_artifacts(
+    session: AsyncSession, connection_id: str, limit: int = 50, offset: int = 0
+) -> list[dict]:
     result = await session.execute(
         select(Artifact)
         .where(Artifact.connection_id == connection_id)
         .order_by(Artifact.updated_at.desc())
-        .limit(limit)
+        .limit(min(limit, 200))
+        .offset(max(offset, 0))
     )
     artifacts = result.scalars().all()
     return [

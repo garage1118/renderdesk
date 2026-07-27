@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import secrets
@@ -5,11 +6,13 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from renderdesk import tools
 from renderdesk.app import app
 from renderdesk.auth import MCPAuthMiddleware, get_current_connection_id
 from renderdesk.db import session_scope
+from renderdesk.models import Connection
 from renderdesk.oauth_provider import oauth_provider
 
 from .conftest import make_user
@@ -44,8 +47,24 @@ async def _register_client(client: httpx.AsyncClient, redirect_uri: str = REDIRE
     return resp.json()["client_id"]
 
 
+async def _csrf_token(client: httpx.AsyncClient) -> str:
+    token = client.cookies.get("csrf_token")
+    if token is None:
+        await client.get("/dashboard/login")
+        token = client.cookies["csrf_token"]
+    return token
+
+
 async def _login(client: httpx.AsyncClient, email: str, password: str) -> None:
-    resp = await client.post("/dashboard/login", data={"email": email, "password": password, "next": "/dashboard"})
+    resp = await client.post(
+        "/dashboard/login",
+        data={
+            "email": email,
+            "password": password,
+            "next": "/dashboard",
+            "csrf_token": await _csrf_token(client),
+        },
+    )
     assert resp.status_code == 303, resp.text
 
 
@@ -66,7 +85,10 @@ async def _authorize_and_consent(
     assert resp.status_code in (302, 303, 307, 308), resp.text
     request_id = parse_qs(urlparse(resp.headers["location"]).query)["request_id"][0]
 
-    resp = await client.post("/oauth/consent", data={"request_id": request_id, "action": "approve"})
+    resp = await client.post(
+        "/oauth/consent",
+        data={"request_id": request_id, "action": "approve", "csrf_token": await _csrf_token(client)},
+    )
     assert resp.status_code in (302, 303, 307, 308), resp.text
     qs = parse_qs(urlparse(resp.headers["location"]).query)
     assert "code" in qs, resp.headers["location"]
@@ -141,6 +163,25 @@ async def test_full_pkce_round_trip_authenticates(client):
     status, body = await _through_mcp_auth_middleware(token_data["access_token"])
     assert status == 200
     assert body == f"connection={access_token.subject}".encode()
+
+
+async def test_concurrent_connection_creation_does_not_duplicate(client):
+    user_id = await make_user(email="dave-concurrent@example.com", password="pw123456")
+    client_id = await _register_client(client)
+
+    results = await asyncio.gather(
+        oauth_provider._get_or_create_connection(user_id, client_id),
+        oauth_provider._get_or_create_connection(user_id, client_id),
+    )
+    assert results[0] == results[1]
+
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(Connection).where(Connection.user_id == user_id, Connection.client_id == client_id)
+            )
+        ).scalars().all()
+    assert len(rows) == 1
 
 
 async def test_wrong_code_verifier_is_rejected(client):
@@ -230,7 +271,9 @@ async def test_revoking_connection_invalidates_oauth_access_token(client):
     _, token_data = await _full_flow(client, "dave7@example.com", "pw123456")
     access_token = await oauth_provider.load_access_token(token_data["access_token"])
 
-    resp = await client.post(f"/dashboard/connections/{access_token.subject}/revoke")
+    resp = await client.post(
+        f"/dashboard/connections/{access_token.subject}/revoke", data={"csrf_token": await _csrf_token(client)}
+    )
     assert resp.status_code == 303
 
     status, _ = await _through_mcp_auth_middleware(token_data["access_token"])

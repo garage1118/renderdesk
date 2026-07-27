@@ -5,7 +5,7 @@
     <a href="/dashboard/connections" class="{{ 'active' if active_nav == 'connections' else '' }}">Connections</a>
   </nav>
   <div class="topbar-actions">
-    <button class="theme-toggle" type="button" onclick="toggleTheme()"><span data-theme-icon></span></button>
-    <form method="post" action="/dashboard/logout"><button type="submit" class="btn btn-ghost btn-sm">Log out ({{ user.email }})</button></form>
+    <button class="theme-toggle" type="button" onclick="toggleTheme()" aria-label="Toggle color theme"><span data-theme-icon></span></button>
+    <form method="post" action="/dashboard/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}"><button type="submit" class="btn btn-ghost btn-sm">Log out ({{ user.email }})</button></form>
   </div>
 </header>

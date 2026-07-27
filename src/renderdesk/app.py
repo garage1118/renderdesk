@@ -16,6 +16,7 @@ from sqlalchemy.exc import OperationalError
 
 from renderdesk.auth import MCPAuthMiddleware
 from renderdesk.config import settings
+from renderdesk.csrf import CSRFCookieMiddleware
 from renderdesk.dashboard import router as dashboard_router
 from renderdesk.db import engine
 from renderdesk.mcp_server import mcp
@@ -39,10 +40,10 @@ def _run_migrations() -> None:
         try:
             command.upgrade(Config("alembic.ini"), "head")
             return
-        except OperationalError:
-            if attempt == 4:
+        except OperationalError as exc:
+            if "database is locked" not in str(exc) or attempt == 4:
                 raise
-            time.sleep(2)
+            time.sleep(2**attempt)
 
 
 @asynccontextmanager
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(CSRFCookieMiddleware)
 app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))

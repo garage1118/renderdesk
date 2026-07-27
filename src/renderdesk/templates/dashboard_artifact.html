@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 <title>renderdesk — {{ artifact.title or "Untitled" }}</title>
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
@@ -11,6 +12,7 @@
     {% if is_owner %}
     <form method="post" action="/dashboard/a/{{ artifact.id }}/delete"
           onsubmit="return confirm('Delete this artifact permanently? This also removes its comments and shares.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <button type="submit" class="btn btn-danger btn-sm">Delete artifact</button>
     </form>
     {% endif %}
@@ -26,6 +28,7 @@
       <li>
         <span>{{ share.email }}</span>
         <form method="post" action="/dashboard/a/{{ artifact.id }}/shares/{{ share.share_id }}/unshare">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
           <button type="submit" class="btn-danger-text">Unshare</button>
         </form>
       </li>
@@ -35,6 +38,7 @@
     <p>Not shared with anyone yet.</p>
     {% endif %}
     <form method="post" action="/dashboard/a/{{ artifact.id }}/share" class="field-row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="text" name="email" placeholder="Share with email..." required>
       <button type="submit" class="btn" style="white-space:nowrap">Share</button>
     </form>
@@ -46,6 +50,7 @@
     <h2 class="section-title">Move to another connection</h2>
     {% if reassign_error %}<p class="error-text">{{ reassign_error }}</p>{% endif %}
     <form method="post" action="/dashboard/a/{{ artifact.id }}/reassign" class="field-row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <select name="target_connection_id">
         {% for c in other_connections %}
         <option value="{{ c.id }}">{{ c.label or ("connection " + c.id[:8]) }}{{ " (OAuth)" if c.client_id else "" }}</option>
@@ -73,12 +78,14 @@
         {% endfor %}
         <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/reply" class="field-row" style="margin-top:0.75rem">
           <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
           <input type="text" name="body" placeholder="Reply..." required>
           <button type="submit" class="btn btn-sm">Reply</button>
         </form>
         <div class="thread-actions">
           <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/resolve">
             <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <button type="submit" class="btn btn-sm">{{ "Reopen" if thread.resolved else "Resolve" }}</button>
           </form>
         </div>
@@ -87,9 +94,11 @@
       <p>No comments yet.</p>
       {% endfor %}
       <form method="post" action="/dashboard/a/{{ artifact.id }}/comments" class="new-thread">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
         <textarea name="body" placeholder="Start a new thread..." rows="3" required></textarea>
         <button type="submit" class="btn btn-primary btn-sm" style="margin-top:0.6rem">Comment</button>
       </form>
     </div>
   </div>
 </main>
+</html>

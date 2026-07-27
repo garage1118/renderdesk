@@ -85,6 +85,9 @@ class Artifact(Base):
 
 class ArtifactVersion(Base):
     __tablename__ = "artifact_versions"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", "version", name="uq_artifact_versions_artifact_id_version"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
