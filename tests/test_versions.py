@@ -33,7 +33,7 @@ async def test_list_versions_returns_all_in_descending_order_with_current_flagge
     assert history[0]["is_current"] is True
     assert history[1]["is_current"] is False
     assert history[2]["is_current"] is False
-    assert history[0]["byte_size"] == len("v3".encode())
+    assert history[0]["byte_size"] == len(b"v3")
 
 
 async def test_list_versions_by_non_owner_raises():

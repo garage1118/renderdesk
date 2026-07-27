@@ -1,6 +1,6 @@
 import html as html_escape
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 import nh3
 from fastapi import APIRouter, HTTPException, Response

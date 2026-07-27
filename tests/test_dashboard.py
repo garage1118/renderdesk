@@ -39,7 +39,9 @@ async def test_resolve_session_deletes_expired_row():
     assert user is None
 
     async with session_scope() as session:
-        remaining = (await session.execute(select(Session).where(Session.id == "expired-session-1"))).scalar_one_or_none()
+        remaining = (
+            await session.execute(select(Session).where(Session.id == "expired-session-1"))
+        ).scalar_one_or_none()
     assert remaining is None
 
 
@@ -158,7 +160,7 @@ async def test_login_then_dashboard_lists_own_artifact(client):
 
 
 async def test_dashboard_does_not_show_another_users_artifact(client):
-    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    await make_user(email="dave@example.com", password="correct-horse")
     other_connection = await make_connection()  # belongs to a different, auto-created user
     async with session_scope() as session:
         other_published = await tools.publish_artifact(session, other_connection, "not yours", "markdown")

@@ -38,4 +38,24 @@ dev = [
     "pytest>=8.3",
     "httpx>=0.27",
     "pytest-asyncio>=0.24",
+    "ruff>=0.8",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI's Depends()/Form() as a parameter default is the framework's
+# own required idiom, not the bug pattern bugbear is built to catch.
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# conftest.py deliberately sets env vars before importing anything that
+# constructs Settings at import time (see its own comment) — reordering
+# these imports to satisfy E402 would break that.
+"tests/conftest.py" = ["E402"]
+# Alembic's own generated boilerplate (revision/down_revision typing) —
+# left exactly as generated rather than hand-edited for style.
+"migrations/versions/*.py" = ["UP007", "UP035"]

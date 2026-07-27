@@ -12,10 +12,9 @@ from renderdesk.auth import generate_token, hash_token
 from renderdesk.config import settings
 from renderdesk.csrf import verify_csrf
 from renderdesk.db import session_scope
-from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, User, utcnow
+from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, OAuthClient, User, utcnow
 from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
 from renderdesk.models import OAuthAuthorizationCode as OAuthAuthorizationCodeRow
-from renderdesk.models import OAuthClient
 from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 from renderdesk.oauth_provider import oauth_provider
 from renderdesk.quotas import QuotaExceededError
@@ -472,7 +471,9 @@ async def dashboard_delete_connection(request: Request, connection_id: str, user
         # themselves (see dashboard_delete_artifact) is the explicit way to
         # do it, rather than an implicit side effect of cleaning up a token.
         artifact_count = (
-            await session.execute(select(func.count()).select_from(Artifact).where(Artifact.connection_id == connection_id))
+            await session.execute(
+                select(func.count()).select_from(Artifact).where(Artifact.connection_id == connection_id)
+            )
         ).scalar_one()
         comment_count = (
             await session.execute(

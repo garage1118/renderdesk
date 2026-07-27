@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -16,12 +16,10 @@ from sqlalchemy import delete, select, update
 
 from renderdesk.auth import generate_token, hash_token
 from renderdesk.db import session_scope
-from renderdesk.models import Connection
+from renderdesk.models import Connection, OAuthClient, utcnow
 from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
 from renderdesk.models import OAuthAuthorizationCode as OAuthAuthorizationCodeRow
-from renderdesk.models import OAuthClient
 from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
-from renderdesk.models import utcnow
 
 ACCESS_TOKEN_TTL = timedelta(hours=1)
 REFRESH_TOKEN_TTL = timedelta(days=180)
@@ -39,7 +37,7 @@ AUTHORIZATION_CODE_TTL = timedelta(minutes=10)
 def _ts(dt: datetime) -> float:
     # Naive-but-UTC (see models.utcnow) — attach tzinfo explicitly rather
     # than letting .timestamp() assume the system's local timezone.
-    return dt.replace(tzinfo=timezone.utc).timestamp()
+    return dt.replace(tzinfo=UTC).timestamp()
 
 
 class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):

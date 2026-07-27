@@ -1,7 +1,7 @@
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, JSON, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from renderdesk.db import Base
@@ -11,10 +11,10 @@ def utcnow() -> datetime:
     # Naive UTC: SQLite has no timezone-aware column type, so the whole app
     # standardizes on naive-but-always-UTC datetimes to avoid aware/naive
     # comparison bugs when values round-trip through the DB.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
-class ArtifactFormat(str, enum.Enum):
+class ArtifactFormat(enum.StrEnum):
     html = "html"
     markdown = "markdown"
     code = "code"
