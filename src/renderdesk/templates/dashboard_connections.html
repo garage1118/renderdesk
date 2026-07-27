@@ -1,53 +1,46 @@
 <!doctype html>
 <title>renderdesk — connections</title>
-<style>
-  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #1e293b; }
-  a { color: #38bdf8; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-  button { background: none; border: 1px solid #334155; color: #e2e8f0; padding: 0.35rem 0.75rem; border-radius: 6px; cursor: pointer; }
-  .revoked { opacity: 0.5; }
-  .new-token { display: flex; gap: 0.5rem; margin-bottom: 2rem; }
-  .new-token input { padding: 0.4rem 0.6rem; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
-  .new-token button { background: #38bdf8; color: #0f172a; border: none; font-weight: 600; }
-  .error { background: #3f1d1d; border: 1px solid #7f1d1d; color: #fca5a5; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; }
-  button.danger { border-color: #7f1d1d; color: #fca5a5; }
-</style>
-<header>
-  <h1 style="margin:0;font-size:1.2rem;">Connections</h1>
-  <div><a href="/dashboard">&larr; Artifacts</a></div>
-</header>
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<form method="post" action="/dashboard/connections/tokens" class="new-token">
-  <input type="text" name="label" placeholder="Label (e.g. laptop, opencode)">
-  <button type="submit">Create personal token</button>
-</form>
-{% if connections %}
-<table>
-  <tr><th>Label</th><th>Kind</th><th>Created</th><th>Status</th><th></th></tr>
-  {% for row in connections %}
-  <tr class="{{ 'revoked' if row.connection.revoked_at else '' }}">
-    <td>{{ row.connection.label or "—" }}</td>
-    <td>{{ row.kind }}{% if row.client_name %} ({{ row.client_name }}){% endif %}</td>
-    <td>{{ row.connection.created_at }}</td>
-    <td>{{ "Revoked" if row.connection.revoked_at else "Active" }}</td>
-    <td>
-      {% if not row.connection.revoked_at %}
-      <form method="post" action="/dashboard/connections/{{ row.connection.id }}/revoke">
-        <button type="submit">Revoke</button>
-      </form>
-      {% else %}
-      <form method="post" action="/dashboard/connections/{{ row.connection.id }}/delete"
-            onsubmit="return confirm('Permanently delete this connection? This cannot be undone.');">
-        <button type="submit" class="danger">Delete</button>
-      </form>
-      {% endif %}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
-{% else %}
-<p>No connections yet.</p>
-{% endif %}
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+{% set active_nav = "connections" %}
+{% include "_topbar.html" %}
+<main class="page">
+  <div class="page-header">
+    <h1 class="page-title">Connections</h1>
+  </div>
+
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+  <form method="post" action="/dashboard/connections/tokens" class="field-row" style="margin-bottom:2rem;max-width:480px">
+    <input type="text" name="label" placeholder="Label (e.g. laptop, opencode)">
+    <button type="submit" class="btn btn-primary" style="white-space:nowrap">Create token</button>
+  </form>
+
+  {% if connections %}
+  <table class="ds-table">
+    <tr><th>Label</th><th>Kind</th><th>Created</th><th>Status</th><th></th></tr>
+    {% for row in connections %}
+    <tr class="{{ 'is-muted' if row.connection.revoked_at else '' }}">
+      <td>{{ row.connection.label or "—" }}</td>
+      <td>{{ row.kind }}{% if row.client_name %} ({{ row.client_name }}){% endif %}</td>
+      <td>{{ row.connection.created_at }}</td>
+      <td><span class="badge {{ 'badge-revoked' if row.connection.revoked_at else 'badge-active' }}">{{ "Revoked" if row.connection.revoked_at else "Active" }}</span></td>
+      <td>
+        {% if not row.connection.revoked_at %}
+        <form method="post" action="/dashboard/connections/{{ row.connection.id }}/revoke">
+          <button type="submit" class="btn btn-sm">Revoke</button>
+        </form>
+        {% else %}
+        <form method="post" action="/dashboard/connections/{{ row.connection.id }}/delete"
+              onsubmit="return confirm('Permanently delete this connection? This cannot be undone.');">
+          <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty-state">No connections yet.</div>
+  {% endif %}
+</main>

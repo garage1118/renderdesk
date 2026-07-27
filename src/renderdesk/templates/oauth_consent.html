@@ -1,23 +1,19 @@
 <!doctype html>
 <title>renderdesk — authorize {{ client_name }}</title>
-<style>
-  body { font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0f172a; color: #e2e8f0; }
-  .card { background: #1e293b; padding: 2rem; border-radius: 12px; width: 340px; }
-  h1 { margin: 0 0 0.5rem; font-size: 1.1rem; }
-  p { color: #94a3b8; font-size: 0.9rem; }
-  .actions { display: flex; gap: 0.5rem; margin-top: 1.5rem; }
-  button { flex: 1; padding: 0.5rem; border-radius: 6px; border: 1px solid #334155; background: none; color: #e2e8f0; font-weight: 600; cursor: pointer; }
-  button.approve { background: #38bdf8; color: #0f172a; border: none; }
-</style>
-<div class="card">
-  <h1>Authorize {{ client_name }}</h1>
-  <p>Signed in as {{ user.email }}. This will let <strong>{{ client_name }}</strong> access renderdesk on your
-    behalf{% if scope %} (scope: {{ scope }}){% endif %}.</p>
-  <form method="post" action="/oauth/consent">
-    <input type="hidden" name="request_id" value="{{ request_id }}">
-    <div class="actions">
-      <button type="submit" name="action" value="deny">Deny</button>
-      <button type="submit" name="action" value="approve" class="approve">Approve</button>
-    </div>
-  </form>
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+<div class="auth-shell">
+  <a href="/" class="brand" style="font-size:1.15rem"><img src="/static/logo.svg" class="brand-mark" alt="">renderdesk</a>
+  <div class="card auth-card">
+    <h1>Authorize {{ client_name }}</h1>
+    <p class="auth-sub">Signed in as {{ user.email }}. This will let <strong>{{ client_name }}</strong> access renderdesk on your
+      behalf{% if scope %} (scope: {{ scope }}){% endif %}.</p>
+    <form method="post" action="/oauth/consent">
+      <input type="hidden" name="request_id" value="{{ request_id }}">
+      <div class="field-row" style="margin-top:0.5rem">
+        <button type="submit" name="action" value="deny" class="btn btn-block">Deny</button>
+        <button type="submit" name="action" value="approve" class="btn btn-primary btn-block">Approve</button>
+      </div>
+    </form>
+  </div>
 </div>

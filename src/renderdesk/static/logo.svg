@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="topGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00C0F0"></stop>
+      <stop offset="100%" stop-color="#2185C5"></stop>
+    </linearGradient>
+
+    <linearGradient id="leftGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2185C5"></stop>
+      <stop offset="100%" stop-color="#4B51A1"></stop>
+    </linearGradient>
+
+    <linearGradient id="rightGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2B7BB9"></stop>
+      <stop offset="100%" stop-color="#55479E"></stop>
+    </linearGradient>
+
+    <linearGradient id="sparkleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E0FFFF"></stop>
+      <stop offset="100%" stop-color="#70E4FF"></stop>
+    </linearGradient>
+
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur"></feGaussianBlur>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"></feComposite>
+    </filter>
+  </defs>
+
+  <g transform="translate(0, 10)">
+    <polygon points="250,90 410,182 250,274 90,182" fill="url(#topGrad)"></polygon>
+
+    <polygon points="82,196 242,288 242,472 82,380" fill="url(#leftGrad)"></polygon>
+
+    <polygon points="258,288 418,196 418,380 258,472" fill="url(#rightGrad)"></polygon>
+
+    <g transform="translate(250, 182)">
+      <path d="M -50,-10 L -20,-27 M 20,-27 L 50,-10" stroke="url(#sparkleGrad)" stroke-width="4" stroke-linecap="round"></path>
+      <path d="M 50,10 L 20,27 M -20,27 L -50,10" stroke="url(#sparkleGrad)" stroke-width="4" stroke-linecap="round"></path>
+
+      <path d="M -38,-2 L -15,-15 M 15,-15 L 38,-2" stroke="url(#sparkleGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"></path>
+      <path d="M 38,2 L 15,15 M -15,15 L -38,2" stroke="url(#sparkleGrad)" stroke-width="3" stroke-linecap="round" opacity="0.8"></path>
+
+      <polygon points="0,-22 18,0 0,22 -18,0" fill="url(#sparkleGrad)" filter="url(#glow)"></polygon>
+
+      <polygon points="0,-10 8,0 0,10 -8,0" fill="#FFFFFF"></polygon>
+    </g>
+  </g>
+</svg>

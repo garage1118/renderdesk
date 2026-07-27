@@ -1,102 +1,95 @@
 <!doctype html>
 <title>renderdesk — {{ artifact.title or "Untitled" }}</title>
-<style>
-  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 2rem; }
-  .layout { display: flex; gap: 1.5rem; align-items: flex-start; }
-  iframe { flex: 2; height: 70vh; border: 1px solid #1e293b; border-radius: 8px; background: white; }
-  .comments { flex: 1; min-width: 320px; }
-  .thread { border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem; }
-  .thread.resolved { opacity: 0.5; }
-  .comment { padding: 0.4rem 0; border-bottom: 1px solid #1e293b; }
-  .comment:last-child { border-bottom: none; }
-  .author { font-size: 0.75rem; color: #94a3b8; }
-  textarea, input[type=text] { width: 100%; box-sizing: border-box; padding: 0.5rem; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
-  button { padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid #334155; background: none; color: #e2e8f0; cursor: pointer; }
-  a { color: #38bdf8; }
-  .danger { border-color: #7f1d1d; color: #f87171; }
-  .share-list { list-style: none; padding: 0; margin: 0 0 0.75rem; }
-  .share-list li { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid #1e293b; }
-  .share-list form { display: inline; }
-  .share-list button { border: none; background: none; color: #94a3b8; text-decoration: underline; padding: 0; cursor: pointer; }
-  .error { color: #f87171; margin: 0.5rem 0; }
-  .panel { border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; margin-bottom: 1.5rem; }
-</style>
-<p><a href="/dashboard">&larr; All artifacts</a></p>
-<header style="display:flex;justify-content:space-between;align-items:flex-start;">
-  <h1 style="font-size:1.2rem;margin:0;">{{ artifact.title or "Untitled" }}</h1>
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+{% set active_nav = "artifacts" %}
+{% include "_topbar.html" %}
+<main class="page">
+  <p class="breadcrumb"><a href="/dashboard">&larr; All artifacts</a></p>
+  <div class="page-header">
+    <h1 class="page-title">{{ artifact.title or "Untitled" }}</h1>
+    {% if is_owner %}
+    <form method="post" action="/dashboard/a/{{ artifact.id }}/delete"
+          onsubmit="return confirm('Delete this artifact permanently? This also removes its comments and shares.');">
+      <button type="submit" class="btn btn-danger btn-sm">Delete artifact</button>
+    </form>
+    {% endif %}
+  </div>
+
   {% if is_owner %}
-  <form method="post" action="/dashboard/a/{{ artifact.id }}/delete"
-        onsubmit="return confirm('Delete this artifact permanently? This also removes its comments and shares.');">
-    <button type="submit" class="danger">Delete artifact</button>
-  </form>
-  {% endif %}
-</header>
-{% if is_owner %}
-<div class="panel">
-  <h2 style="font-size:1rem;margin-top:0;">Shared with</h2>
-  {% if share_error %}<p class="error">{{ share_error }}</p>{% endif %}
-  {% if shares %}
-  <ul class="share-list">
-    {% for share in shares %}
-    <li>
-      <span>{{ share.email }}</span>
-      <form method="post" action="/dashboard/a/{{ artifact.id }}/shares/{{ share.share_id }}/unshare">
-        <button type="submit">Unshare</button>
-      </form>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p>Not shared with anyone yet.</p>
-  {% endif %}
-  <form method="post" action="/dashboard/a/{{ artifact.id }}/share" style="display:flex;gap:0.5rem;">
-    <input type="text" name="email" placeholder="Share with email..." required>
-    <button type="submit">Share</button>
-  </form>
-</div>
-{% endif %}
-{% if is_owner and other_connections %}
-<div class="panel">
-  <h2 style="font-size:1rem;margin-top:0;">Move to another connection</h2>
-  {% if reassign_error %}<p class="error">{{ reassign_error }}</p>{% endif %}
-  <form method="post" action="/dashboard/a/{{ artifact.id }}/reassign" style="display:flex;gap:0.5rem;">
-    <select name="target_connection_id">
-      {% for c in other_connections %}
-      <option value="{{ c.id }}">{{ c.label or ("connection " + c.id[:8]) }}{{ " (OAuth)" if c.client_id else "" }}</option>
+  <div class="panel">
+    <h2 class="section-title">Shared with</h2>
+    {% if share_error %}<p class="error-text">{{ share_error }}</p>{% endif %}
+    {% if shares %}
+    <ul class="share-list">
+      {% for share in shares %}
+      <li>
+        <span>{{ share.email }}</span>
+        <form method="post" action="/dashboard/a/{{ artifact.id }}/shares/{{ share.share_id }}/unshare">
+          <button type="submit" class="btn-danger-text">Unshare</button>
+        </form>
+      </li>
       {% endfor %}
-    </select>
-    <button type="submit">Move</button>
-  </form>
-</div>
-{% endif %}
-<div class="layout">
-  <iframe src="/a/{{ artifact.id }}"></iframe>
-  <div class="comments">
-    <h2 style="font-size:1rem;">Comments</h2>
-    {% for thread in threads %}
-    <div class="thread {{ 'resolved' if thread.resolved else '' }}">
-      {% for c in thread.comments %}
-      <div class="comment">
-        <div class="author">{{ c.author }} &middot; {{ c.created_at }}</div>
-        <div>{{ c.body }}</div>
-      </div>
-      {% endfor %}
-      <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/reply" style="margin-top:0.5rem;">
-        <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
-        <input type="text" name="body" placeholder="Reply..." required>
-        <button type="submit">Reply</button>
-      </form>
-      <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/resolve" style="margin-top:0.35rem;">
-        <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
-        <button type="submit">{{ "Reopen" if thread.resolved else "Resolve" }}</button>
-      </form>
-    </div>
+    </ul>
     {% else %}
-    <p>No comments yet.</p>
-    {% endfor %}
-    <form method="post" action="/dashboard/a/{{ artifact.id }}/comments">
-      <textarea name="body" placeholder="Start a new thread..." required rows="3"></textarea>
-      <button type="submit" style="margin-top:0.5rem;">Comment</button>
+    <p>Not shared with anyone yet.</p>
+    {% endif %}
+    <form method="post" action="/dashboard/a/{{ artifact.id }}/share" class="field-row">
+      <input type="text" name="email" placeholder="Share with email..." required>
+      <button type="submit" class="btn" style="white-space:nowrap">Share</button>
     </form>
   </div>
-</div>
+  {% endif %}
+
+  {% if is_owner and other_connections %}
+  <div class="panel">
+    <h2 class="section-title">Move to another connection</h2>
+    {% if reassign_error %}<p class="error-text">{{ reassign_error }}</p>{% endif %}
+    <form method="post" action="/dashboard/a/{{ artifact.id }}/reassign" class="field-row">
+      <select name="target_connection_id">
+        {% for c in other_connections %}
+        <option value="{{ c.id }}">{{ c.label or ("connection " + c.id[:8]) }}{{ " (OAuth)" if c.client_id else "" }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn" style="white-space:nowrap">Move</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="layout-split">
+    <iframe class="preview-frame layout-main" src="/a/{{ artifact.id }}"></iframe>
+    <div class="layout-side">
+      <h2 class="section-title">Comments</h2>
+      {% for thread in threads %}
+      <div class="thread {{ 'is-resolved' if thread.resolved else '' }}">
+        {% for c in thread.comments %}
+        <div class="comment">
+          <span class="avatar {{ 'role-agent' if c.author == 'agent' else '' }}">{{ c.author[0]|upper }}</span>
+          <div class="comment-body">
+            <div class="comment-meta">{{ c.author }} &middot; {{ c.created_at }}</div>
+            <div>{{ c.body }}</div>
+          </div>
+        </div>
+        {% endfor %}
+        <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/reply" class="field-row" style="margin-top:0.75rem">
+          <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+          <input type="text" name="body" placeholder="Reply..." required>
+          <button type="submit" class="btn btn-sm">Reply</button>
+        </form>
+        <div class="thread-actions">
+          <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/resolve">
+            <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+            <button type="submit" class="btn btn-sm">{{ "Reopen" if thread.resolved else "Resolve" }}</button>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <p>No comments yet.</p>
+      {% endfor %}
+      <form method="post" action="/dashboard/a/{{ artifact.id }}/comments" class="new-thread">
+        <textarea name="body" placeholder="Start a new thread..." rows="3" required></textarea>
+        <button type="submit" class="btn btn-primary btn-sm" style="margin-top:0.6rem">Comment</button>
+      </form>
+    </div>
+  </div>
+</main>

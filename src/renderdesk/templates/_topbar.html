@@ -1,0 +1,11 @@
+<header class="topbar">
+  <a href="/dashboard" class="brand"><img src="/static/logo.svg" class="brand-mark" alt="">renderdesk</a>
+  <nav class="topbar-nav">
+    <a href="/dashboard" class="{{ 'active' if active_nav == 'artifacts' else '' }}">Artifacts</a>
+    <a href="/dashboard/connections" class="{{ 'active' if active_nav == 'connections' else '' }}">Connections</a>
+  </nav>
+  <div class="topbar-actions">
+    <button class="theme-toggle" type="button" onclick="toggleTheme()"><span data-theme-icon></span></button>
+    <form method="post" action="/dashboard/logout"><button type="submit" class="btn btn-ghost btn-sm">Log out ({{ user.email }})</button></form>
+  </div>
+</header>

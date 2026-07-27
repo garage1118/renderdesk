@@ -163,7 +163,7 @@ async def test_create_personal_token_from_dashboard(client):
     assert resp.status_code == 200
 
     # Token is rendered exactly once on the confirmation page.
-    match = re.search(r'id="token">([^<]+)</span>', resp.text)
+    match = re.search(r'id="token"[^>]*>([^<]+)</span>', resp.text)
     assert match is not None
     token = match.group(1)
 

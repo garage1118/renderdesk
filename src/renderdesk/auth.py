@@ -32,7 +32,7 @@ async def resolve_connection(session: AsyncSession, token: str) -> Connection | 
         return None
     if connection.revoked_at is not None:
         return None
-    if connection.expires_at <= utcnow():
+    if connection.expires_at is not None and connection.expires_at <= utcnow():
         return None
     return connection
 
