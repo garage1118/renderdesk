@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<title>renderdesk — {{ artifact.title or "Untitled" }} — version history</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+{% set active_nav = "artifacts" %}
+{% include "_topbar.html" %}
+<main class="page">
+  <p class="breadcrumb"><a href="/dashboard/a/{{ artifact.id }}">&larr; {{ artifact.title or "Untitled" }}</a></p>
+  <div class="page-header">
+    <h1 class="page-title">Version history</h1>
+    {% if old_bytes %}
+    <form method="post" action="/dashboard/a/{{ artifact.id }}/versions/prune"
+          onsubmit="return confirm('Delete every version except the current one? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="btn btn-danger btn-sm">Prune old versions ({{ old_bytes }} bytes)</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if prune_error %}<p class="error-text">{{ prune_error }}</p>{% endif %}
+
+  <table class="ds-table">
+    <tr><th>Version</th><th>Title</th><th>Format</th><th>Size</th><th>Created</th><th></th></tr>
+    {% for v in versions %}
+    <tr>
+      <td>{{ v.version }}{% if v.is_current %} <span class="badge badge-active">Current</span>{% endif %}</td>
+      <td>{{ v.title or "Untitled" }}</td>
+      <td>{{ v.format }}{{ " (" + v.language + ")" if v.language else "" }}</td>
+      <td>{{ v.byte_size }} bytes</td>
+      <td>{{ v.created_at }}</td>
+      <td>
+        <div class="row-actions">
+          <a href="/dashboard/a/{{ artifact.id }}/versions/{{ v.version }}">View</a>
+          {% if not v.is_current %}
+          <form method="post" action="/dashboard/a/{{ artifact.id }}/versions/{{ v.version }}/delete"
+                onsubmit="return confirm('Delete version {{ v.version }} permanently?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button type="submit" class="btn-danger-text">Delete</button>
+          </form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</main>
+</html>

@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from mcp.server.auth.provider import construct_redirect_uri
 from sqlalchemy import delete, func, select
 
-from renderdesk import comments, shares, tools
+from renderdesk import comments, shares, tools, versions, view
 from renderdesk.auth import generate_token, hash_token
 from renderdesk.config import settings
 from renderdesk.csrf import verify_csrf
@@ -219,6 +219,75 @@ async def dashboard_artifact(request: Request, artifact_id: str, user: User = De
     return templates.TemplateResponse(
         request, "dashboard_artifact.html", {**context, "share_error": None, "reassign_error": None}
     )
+
+
+@router.get("/dashboard/a/{artifact_id}/versions")
+async def dashboard_artifact_versions(
+    request: Request, artifact_id: str, user: User = Depends(require_current_user)
+):
+    async with session_scope() as session:
+        try:
+            artifact = await tools.get_owned_artifact_by_user(session, user.id, artifact_id)
+            history = await versions.list_versions(session, user.id, artifact_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    old_bytes = sum(v["byte_size"] for v in history if not v["is_current"])
+    return templates.TemplateResponse(
+        request,
+        "dashboard_versions.html",
+        {"artifact": artifact, "versions": history, "old_bytes": old_bytes, "user": user, "prune_error": None},
+    )
+
+
+@router.get("/dashboard/a/{artifact_id}/versions/{version}")
+async def dashboard_view_version(
+    request: Request, artifact_id: str, version: int, user: User = Depends(require_current_user)
+):
+    async with session_scope() as session:
+        try:
+            artifact = await tools.get_owned_artifact_by_user(session, user.id, artifact_id)
+            version_row = await versions.get_version(session, user.id, artifact_id, version)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    # Always rendered as read-only highlighted source, regardless of the
+    # artifact's actual format — browsing history is for looking at what a
+    # past snapshot contained, never for re-executing it (an old HTML
+    # snapshot doesn't get a live sandboxed preview here, unlike the
+    # current version at /a/{id}).
+    body_html, style = view.render_highlighted_source(version_row.content, version_row.language)
+    return templates.TemplateResponse(
+        request,
+        "dashboard_version_detail.html",
+        {
+            "artifact": artifact,
+            "version": version_row,
+            "body_html": body_html,
+            "style": style,
+            "user": user,
+        },
+    )
+
+
+@router.post("/dashboard/a/{artifact_id}/versions/{version}/delete", dependencies=[Depends(verify_csrf)])
+async def dashboard_delete_version(artifact_id: str, version: int, user: User = Depends(require_current_user)):
+    async with session_scope() as session:
+        try:
+            await versions.delete_version(session, user.id, artifact_id, version)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+        except versions.CannotDeleteCurrentVersionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}/versions", status_code=303)
+
+
+@router.post("/dashboard/a/{artifact_id}/versions/prune", dependencies=[Depends(verify_csrf)])
+async def dashboard_prune_versions(request: Request, artifact_id: str, user: User = Depends(require_current_user)):
+    async with session_scope() as session:
+        try:
+            await versions.prune_old_versions(session, user.id, artifact_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}/versions", status_code=303)
 
 
 @router.post("/dashboard/a/{artifact_id}/share", dependencies=[Depends(verify_csrf)])

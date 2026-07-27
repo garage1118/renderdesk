@@ -5,7 +5,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from renderdesk import auth, comments, shares, tools
+from renderdesk import auth, comments, shares, tools, versions
 from renderdesk.app import app
 from renderdesk.db import session_scope
 from renderdesk.models import Connection, Session, utcnow
@@ -519,3 +519,54 @@ async def test_logout_clears_session(client):
     assert logout_resp.status_code == 303
 
     assert (await client.get("/dashboard")).status_code == 303
+
+
+async def test_version_history_page_lists_versions_and_allows_pruning(client):
+    user_id = await make_user(email="versions-dash@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "v1", "markdown")
+    artifact_id = published["artifact_id"]
+    async with session_scope() as session:
+        await tools.update_artifact(session, connection_id, artifact_id, "v2", base_version=1)
+
+    await _login(client, "versions-dash@example.com", "correct-horse")
+
+    history_resp = await client.get(f"/dashboard/a/{artifact_id}/versions")
+    assert history_resp.status_code == 200
+    assert "Current" in history_resp.text
+    assert "Prune old versions" in history_resp.text
+
+    detail_resp = await client.get(f"/dashboard/a/{artifact_id}/versions/1")
+    assert detail_resp.status_code == 200
+    assert "v1" in detail_resp.text
+
+    # Deleting the current version is rejected...
+    delete_current_resp = await _post(client, f"/dashboard/a/{artifact_id}/versions/2/delete")
+    assert delete_current_resp.status_code == 400
+
+    # ...but the superseded one can be deleted.
+    delete_old_resp = await _post(client, f"/dashboard/a/{artifact_id}/versions/1/delete")
+    assert delete_old_resp.status_code == 303
+
+    async with session_scope() as session:
+        history = await versions.list_versions(session, user_id, artifact_id)
+    assert [v["version"] for v in history] == [2]
+
+    # Prune is a no-op with nothing left to remove, but should still succeed.
+    prune_resp = await _post(client, f"/dashboard/a/{artifact_id}/versions/prune")
+    assert prune_resp.status_code == 303
+
+
+async def test_version_history_requires_ownership(client):
+    owner_id = await make_user(email="versions-owner-dash@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await make_user(email="versions-stranger@example.com", password="stranger-pass")
+    await _login(client, "versions-stranger@example.com", "stranger-pass")
+
+    resp = await client.get(f"/dashboard/a/{artifact_id}/versions")
+    assert resp.status_code == 404

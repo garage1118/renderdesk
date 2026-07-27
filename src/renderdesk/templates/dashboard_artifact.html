@@ -1,6 +1,9 @@
 <!doctype html>
 <html lang="en">
 <title>renderdesk — {{ artifact.title or "Untitled" }}</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
 {% set active_nav = "artifacts" %}
@@ -10,11 +13,14 @@
   <div class="page-header">
     <h1 class="page-title">{{ artifact.title or "Untitled" }}</h1>
     {% if is_owner %}
-    <form method="post" action="/dashboard/a/{{ artifact.id }}/delete"
-          onsubmit="return confirm('Delete this artifact permanently? This also removes its comments and shares.');">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-      <button type="submit" class="btn btn-danger btn-sm">Delete artifact</button>
-    </form>
+    <div class="row-actions">
+      <a href="/dashboard/a/{{ artifact.id }}/versions">Version history (v{{ artifact.version }})</a>
+      <form method="post" action="/dashboard/a/{{ artifact.id }}/delete"
+            onsubmit="return confirm('Delete this artifact permanently? This also removes its comments and shares.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <button type="submit" class="btn btn-danger btn-sm">Delete artifact</button>
+      </form>
+    </div>
     {% endif %}
   </div>
 

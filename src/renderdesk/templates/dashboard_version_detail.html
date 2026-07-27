@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<title>renderdesk — {{ artifact.title or "Untitled" }} — v{{ version.version }}</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/styles.css">
+<script src="/static/theme.js"></script>
+{% set active_nav = "artifacts" %}
+{% include "_topbar.html" %}
+<main class="page">
+  <p class="breadcrumb"><a href="/dashboard/a/{{ artifact.id }}/versions">&larr; Version history</a></p>
+  <div class="page-header">
+    <h1 class="page-title">{{ artifact.title or "Untitled" }} — version {{ version.version }}</h1>
+  </div>
+  <p>Saved {{ version.created_at }} &middot; {{ version.format.value }}{{ " (" + version.language + ")" if version.language else "" }}</p>
+  {{ style | safe }}
+  {{ body_html | safe }}
+</main>
+</html>

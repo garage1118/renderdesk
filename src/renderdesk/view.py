@@ -71,6 +71,27 @@ _PYGMENTS_CSS = (
 )
 
 
+def render_highlighted_source(content: str, language: str | None) -> tuple[str, str]:
+    """Read-only syntax-highlighted rendering of raw source text — shared by
+    the code-format live view above and the dashboard's historical version
+    viewer (versions.py/dashboard.py), since browsing an old snapshot should
+    never re-execute it regardless of the artifact's actual format. No nh3
+    needed: Pygments/html.escape already HTML-escape all source text, and
+    this only ever builds a fixed <pre>/<code> skeleton, never arbitrary
+    parsed markup. Returns (body_html, style_block)."""
+    lexer = None
+    if language:
+        try:
+            lexer = get_lexer_by_name(language)
+        except ClassNotFound:
+            lexer = None
+
+    if lexer is not None:
+        highlighted = highlight(content, lexer, _pygments_formatter)
+        return f'<pre class="codehilite"><code>{highlighted}</code></pre>', _PYGMENTS_CSS
+    return f"<pre>{html_escape.escape(content)}</pre>", ""
+
+
 def _page_csp(has_mermaid: bool, has_math: bool) -> str:
     # Scripts/fonts/external styles stay off entirely for ordinary markdown
     # (it's sanitized, not executable, by design) — each directive is only
@@ -208,24 +229,7 @@ async def view_artifact(artifact_id: str) -> Response:
     if artifact.format == ArtifactFormat.code:
         # Read-only, syntax-highlighted, never executed — distinct from
         # the HTML format below, which iframes a sandboxed live preview.
-        # Reuses the exact same Pygments setup as markdown fenced code
-        # blocks; no nh3 needed since Pygments already HTML-escapes
-        # source text and this builds a fixed skeleton, not arbitrary
-        # parsed markup.
-        lexer = None
-        if artifact.language:
-            try:
-                lexer = get_lexer_by_name(artifact.language)
-            except ClassNotFound:
-                lexer = None
-
-        if lexer is not None:
-            highlighted = highlight(artifact.content, lexer, _pygments_formatter)
-            code_html = f'<pre class="codehilite"><code>{highlighted}</code></pre>'
-            style = _PYGMENTS_CSS
-        else:
-            code_html = f"<pre>{html_escape.escape(artifact.content)}</pre>"
-            style = ""
+        code_html, style = render_highlighted_source(artifact.content, artifact.language)
 
         title = html_escape.escape(artifact.title or "Untitled")
         safe_id = html_escape.escape(artifact_id)
