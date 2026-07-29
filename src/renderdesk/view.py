@@ -98,7 +98,7 @@ def _page_csp(has_mermaid: bool, has_math: bool) -> str:
     # loosened for the specific same-origin vendored asset that needs it,
     # never an external CDN.
     style_src = "'unsafe-inline'" + (" 'self'" if has_math else "")  # 'self' for the vendored katex.min.css link
-    parts = ["default-src 'none'", f"style-src {style_src}", "img-src data: blob:"]
+    parts = ["default-src 'none'", f"style-src {style_src}", "img-src data: blob:", "frame-ancestors 'self'"]
     if has_mermaid or has_math:
         parts.append("script-src 'self'")
     if has_math:
@@ -259,8 +259,14 @@ async def view_artifact_raw(artifact_id: str) -> Response:
 
     if artifact.format == ArtifactFormat.code:
         # Exact source, no highlighting — text/plain never executes, so
-        # no CSP header is needed here.
-        return Response(content=artifact.content, media_type="text/plain")
+        # no CSP header is needed here. nosniff is still worth setting: it's
+        # defense-in-depth against a browser ever choosing to sniff a
+        # declared text/plain response into something executable.
+        return Response(
+            content=artifact.content,
+            media_type="text/plain",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
 
     if artifact.format != ArtifactFormat.html:
         raise HTTPException(status_code=404)

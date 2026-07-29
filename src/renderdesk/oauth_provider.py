@@ -23,6 +23,10 @@ from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 
 ACCESS_TOKEN_TTL = timedelta(hours=1)
 REFRESH_TOKEN_TTL = timedelta(days=180)
+# A registered client that's never actually completed a token exchange
+# (abandoned mid-flow, or registered and never used) after this long is
+# swept by sweep_expired_oauth_rows — see app.py's lifespan.
+UNUSED_CLIENT_TTL = timedelta(days=30)
 
 # Guards _get_or_create_connection's SELECT-then-INSERT against two
 # concurrent token exchanges for the same (user_id, client_id) both seeing
@@ -316,3 +320,26 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
 
 
 oauth_provider = RenderdeskOAuthProvider()
+
+
+async def sweep_expired_oauth_rows() -> None:
+    """Garbage-collects rows nothing else ever cleans up: abandoned/expired
+    pending-or-issued authorization codes, expired refresh tokens, and
+    registered clients that never completed a single token exchange. Each
+    POST /register otherwise permanently adds a row on a disk-constrained
+    homelab SQLite file (see DESIGN_NOTES.md). Deletes codes/refresh tokens
+    before clients so an unused client is never removed while a (necessarily
+    also-expired, since it was never converted into a Connection) row still
+    references it — relevant now that PRAGMA foreign_keys is enforced."""
+    now = utcnow()
+    async with session_scope() as session:
+        await session.execute(delete(OAuthAuthorizationCodeRow).where(OAuthAuthorizationCodeRow.expires_at <= now))
+        await session.execute(delete(OAuthRefreshTokenRow).where(OAuthRefreshTokenRow.expires_at <= now))
+        used_client_ids = select(Connection.client_id).where(Connection.client_id.is_not(None)).distinct()
+        await session.execute(
+            delete(OAuthClient).where(
+                OAuthClient.created_at <= now - UNUSED_CLIENT_TTL,
+                OAuthClient.client_id.not_in(used_client_ids),
+            )
+        )
+        await session.commit()

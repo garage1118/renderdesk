@@ -1,3 +1,5 @@
+import secrets
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -6,17 +8,28 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from mcp.server.auth.provider import construct_redirect_uri
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from renderdesk import comments, shares, tools, versions, view
 from renderdesk.auth import generate_token, hash_token
+from renderdesk.auth_scheme import get_active_auth_scheme
 from renderdesk.config import settings
 from renderdesk.csrf import verify_csrf
 from renderdesk.db import session_scope
-from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, OAuthClient, User, utcnow
+from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, OAuthClient, OidcIdentity, User, utcnow
 from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
 from renderdesk.models import OAuthAuthorizationCode as OAuthAuthorizationCodeRow
 from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
+from renderdesk.oauth_consent_state import OAUTH_FLOW_COOKIE_NAME
+from renderdesk.oauth_consent_state import read_cookie_value as read_oauth_flow_cookie
 from renderdesk.oauth_provider import oauth_provider
+from renderdesk.oidc import OidcError, build_authorization_url, exchange_code_and_validate
+from renderdesk.oidc_state import (
+    OIDC_STATE_COOKIE_NAME,
+    OIDC_STATE_MAX_AGE,
+    make_cookie_value,
+    read_cookie_value,
+)
 from renderdesk.quotas import QuotaExceededError
 from renderdesk.session_auth import (
     LOGIN_PATH,
@@ -47,20 +60,38 @@ templates.env.globals["csrf_token"] = lambda request: request.state.csrf_token
 _COOKIE_SECURE = urlparse(settings.public_base_url).scheme == "https"
 
 
+def _require_password_scheme() -> None:
+    # "oidc"/"saml" are valid *configuration* values (see auth_scheme.py)
+    # ahead of their actual implementation — this is the seam where their
+    # real login flow will get wired in later. Until then, deliberately
+    # refuse rather than let the password form silently pretend to work
+    # under a scheme it doesn't belong to.
+    scheme = get_active_auth_scheme()
+    if scheme != "password":
+        raise HTTPException(status_code=501, detail=f"auth scheme {scheme!r} is not implemented yet")
+
+
+_IMPLEMENTED_SCHEMES = ("password", "oidc")
+
+
 @router.get(LOGIN_PATH)
 async def login_form(request: Request, next: str = "/dashboard"):
-    return templates.TemplateResponse(request, "login.html", {"error": None, "next": next})
+    scheme = get_active_auth_scheme()
+    if scheme not in _IMPLEMENTED_SCHEMES:
+        raise HTTPException(status_code=501, detail=f"auth scheme {scheme!r} is not implemented yet")
+    return templates.TemplateResponse(request, "login.html", {"scheme": scheme, "error": None, "next": next})
 
 
 @router.post(LOGIN_PATH, dependencies=[Depends(verify_csrf)])
 async def login_submit(
     request: Request, email: str = Form(...), password: str = Form(...), next: str = Form("/dashboard")
 ):
+    _require_password_scheme()
     if is_login_rate_limited(email):
         return templates.TemplateResponse(
             request,
             "login.html",
-            {"error": "Too many failed attempts. Try again in a few minutes.", "next": next},
+            {"scheme": "password", "error": "Too many failed attempts. Try again in a few minutes.", "next": next},
             status_code=429,
         )
 
@@ -69,7 +100,10 @@ async def login_submit(
         if user is None or not verify_password(user, password):
             record_failed_login(email)
             return templates.TemplateResponse(
-                request, "login.html", {"error": "Invalid email or password", "next": next}, status_code=401
+                request,
+                "login.html",
+                {"scheme": "password", "error": "Invalid email or password", "next": next},
+                status_code=401,
             )
         clear_failed_logins(email)
         token = await create_session(session, user)
@@ -97,8 +131,179 @@ async def logout(request: Request):
     return response
 
 
+@router.get("/dashboard/auth/oidc/login")
+async def oidc_login(request: Request, next: str = "/dashboard"):
+    if get_active_auth_scheme() != "oidc":
+        raise HTTPException(status_code=501, detail="SSO login is not enabled for this instance")
+    state, nonce, code_verifier = generate_token(), generate_token(), generate_token()
+    next_path = safe_next_path(next)
+    try:
+        auth_url = await build_authorization_url(state, nonce, code_verifier)
+    except OidcError as exc:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"scheme": "oidc", "error": f"Could not start sign-in: {exc}", "next": next_path},
+            status_code=502,
+        )
+    response = RedirectResponse(url=auth_url, status_code=303)
+    response.set_cookie(
+        OIDC_STATE_COOKIE_NAME,
+        make_cookie_value(state, nonce, code_verifier, next_path),
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="lax",
+        max_age=OIDC_STATE_MAX_AGE,
+    )
+    return response
+
+
+@router.get("/dashboard/auth/oidc/callback")
+async def oidc_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if get_active_auth_scheme() != "oidc":
+        raise HTTPException(status_code=501, detail="SSO login is not enabled for this instance")
+
+    raw = request.cookies.get(OIDC_STATE_COOKIE_NAME)
+    flow = read_cookie_value(raw) if raw else None
+
+    def _fail(message: str, status_code: int = 400):
+        resp = templates.TemplateResponse(
+            request,
+            "login.html",
+            {"scheme": "oidc", "error": message, "next": (flow or {}).get("next", "/dashboard")},
+            status_code=status_code,
+        )
+        resp.delete_cookie(OIDC_STATE_COOKIE_NAME)
+        return resp
+
+    if error:
+        return _fail(f"Sign-in was cancelled or failed at the identity provider ({error_description or error}).")
+    if flow is None:
+        return _fail("Your sign-in attempt expired or is invalid. Please try again.")
+    if not state or not secrets.compare_digest(state, flow["s"]):
+        return _fail("Sign-in state mismatch. Please try again.")
+    if not code:
+        return _fail("The identity provider did not return an authorization code.")
+
+    try:
+        claims = await exchange_code_and_validate(code, flow["v"], flow["n"])
+    except OidcError as exc:
+        return _fail(f"Sign-in failed: {exc}")
+
+    issuer, subject = claims["iss"], claims["sub"]
+    claimed_email = claims.get("email")
+    email_verified = bool(claims.get("email_verified"))
+    # Display-only fallback for provisioning a brand-new account — never
+    # used to match against an existing one (see oidc.py for why).
+    display_fallback = claims.get("preferred_username") or claims.get("upn")
+
+    async with session_scope() as session:
+        identity = (
+            await session.execute(
+                select(OidcIdentity).where(OidcIdentity.issuer == issuer, OidcIdentity.subject == subject)
+            )
+        ).scalar_one_or_none()
+        if identity is not None:
+            user = (await session.execute(select(User).where(User.id == identity.user_id))).scalar_one_or_none()
+            if user is None:
+                return _fail("Your linked account no longer exists. Contact an administrator.")
+        else:
+            # First-time login for this (issuer, subject). A verified email
+            # match against an existing account is never auto-linked — that
+            # would let anyone who can set an IdP account's email claim to a
+            # victim's address silently take over the matching local
+            # account. Manual linking (out of scope here) is required
+            # instead.
+            if claimed_email and email_verified:
+                existing = (
+                    await session.execute(select(User).where(User.email == claimed_email))
+                ).scalar_one_or_none()
+                if existing is not None:
+                    return _fail(
+                        "An account already exists for this email. Contact an administrator to link your SSO sign-in."
+                    )
+
+            if not settings.oidc_allow_signup:
+                return _fail("No renderdesk account exists yet for you. Contact an administrator.")
+
+            new_email = claimed_email if (claimed_email and email_verified) else display_fallback
+            if new_email is None:
+                return _fail("Sign-in failed: the identity provider did not return a usable identifier.")
+            existing = (await session.execute(select(User).where(User.email == new_email))).scalar_one_or_none()
+            if existing is not None:
+                return _fail(
+                    "An account already exists for this email. Contact an administrator to link your SSO sign-in."
+                )
+
+            user = User(id=str(uuid.uuid4()), email=new_email, password_hash=None, created_at=utcnow())
+            session.add(user)
+            # Flushed separately, before adding the OidcIdentity: User and
+            # OidcIdentity have no ORM relationship() between them, so
+            # nothing tells the unit-of-work that the identity row depends
+            # on the user row — with PRAGMA foreign_keys enforced (db.py),
+            # adding both and flushing once risks the identity INSERT
+            # running first and failing on the FK constraint.
+            await session.flush()
+            session.add(
+                OidcIdentity(id=str(uuid.uuid4()), user_id=user.id, issuer=issuer, subject=subject, created_at=utcnow())
+            )
+            try:
+                await session.flush()
+            except IntegrityError:
+                # Lost a race against a concurrent first-time login for the
+                # same (issuer, subject) — same TOCTOU shape as shares.py's
+                # _create_share. Whoever won already has the row; use it.
+                await session.rollback()
+                identity = (
+                    await session.execute(
+                        select(OidcIdentity).where(OidcIdentity.issuer == issuer, OidcIdentity.subject == subject)
+                    )
+                ).scalar_one_or_none()
+                if identity is None:
+                    return _fail("Sign-in failed due to a concurrent request. Please try again.")
+                user = (await session.execute(select(User).where(User.id == identity.user_id))).scalar_one_or_none()
+                if user is None:
+                    return _fail("Your linked account no longer exists. Contact an administrator.")
+        token = await create_session(session, user)
+
+    response = RedirectResponse(url=flow["next"], status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        httponly=True,
+        secure=_COOKIE_SECURE,
+        samesite="lax",
+        max_age=settings.session_expiry_days * 86400,
+    )
+    response.delete_cookie(OIDC_STATE_COOKIE_NAME)
+    return response
+
+
+def _require_bound_flow(request: Request, request_id: str) -> None:
+    """Rejects a consent request_id that wasn't stamped onto this browser by
+    OAuthConsentBindingMiddleware at /authorize — see that middleware's
+    docstring for the phishing scenario this closes."""
+    raw = request.cookies.get(OAUTH_FLOW_COOKIE_NAME)
+    bound_request_id = read_oauth_flow_cookie(raw) if raw else None
+    if bound_request_id != request_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This authorization link doesn't match your browser session — "
+                "please restart the connection from the application you're authorizing."
+            ),
+        )
+
+
 @router.get("/oauth/consent")
 async def oauth_consent_form(request: Request, request_id: str, user: User = Depends(require_current_user)):
+    _require_bound_flow(request, request_id)
     async with session_scope() as session:
         row = (
             await session.execute(select(OAuthAuthorizationCodeRow).where(OAuthAuthorizationCodeRow.id == request_id))
@@ -109,17 +314,28 @@ async def oauth_consent_form(request: Request, request_id: str, user: User = Dep
             await session.execute(select(OAuthClient).where(OAuthClient.client_id == row.client_id))
         ).scalar_one_or_none()
     client_name = (client_row.metadata_json.get("client_name") if client_row else None) or row.client_id
+    redirect_host = urlparse(row.redirect_uri).netloc
     return templates.TemplateResponse(
         request,
         "oauth_consent.html",
-        {"request_id": request_id, "client_name": client_name, "scope": row.scope, "user": user},
+        {
+            "request_id": request_id,
+            "client_name": client_name,
+            "redirect_host": redirect_host,
+            "scope": row.scope,
+            "user": user,
+        },
     )
 
 
 @router.post("/oauth/consent", dependencies=[Depends(verify_csrf)])
 async def oauth_consent_submit(
-    request_id: str = Form(...), action: str = Form(...), user: User = Depends(require_current_user)
+    request: Request,
+    request_id: str = Form(...),
+    action: str = Form(...),
+    user: User = Depends(require_current_user),
 ):
+    _require_bound_flow(request, request_id)
     async with session_scope() as session:
         row = (
             await session.execute(select(OAuthAuthorizationCodeRow).where(OAuthAuthorizationCodeRow.id == request_id))
@@ -133,9 +349,11 @@ async def oauth_consent_submit(
         if action != "approve":
             await session.delete(row)
             await session.commit()
-            return RedirectResponse(
+            response = RedirectResponse(
                 construct_redirect_uri(redirect_uri, error="access_denied", state=state), status_code=303
             )
+            response.delete_cookie(OAUTH_FLOW_COOKIE_NAME)
+            return response
 
         code = generate_token()
         row.code_hash = hash_token(code)
@@ -143,7 +361,9 @@ async def oauth_consent_submit(
         row.approved = True
         await session.commit()
 
-    return RedirectResponse(construct_redirect_uri(redirect_uri, code=code, state=state), status_code=303)
+    response = RedirectResponse(construct_redirect_uri(redirect_uri, code=code, state=state), status_code=303)
+    response.delete_cookie(OAUTH_FLOW_COOKIE_NAME)
+    return response
 
 
 @router.get("/dashboard")

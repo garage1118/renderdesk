@@ -1,10 +1,12 @@
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from renderdesk.config import settings
 from renderdesk.models import Artifact, ArtifactFormat, ArtifactShare, ArtifactVersion, Comment, Connection
+from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
+from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 from renderdesk.quotas import QuotaExceededError, check_new_artifact_quota, check_update_quota, quota_lock
 
 
@@ -17,6 +19,14 @@ class VersionConflictError(Exception):
 
 
 class InvalidTargetConnectionError(Exception):
+    pass
+
+
+class ConnectionNotRevokedError(Exception):
+    pass
+
+
+class ConnectionHasHistoryError(Exception):
     pass
 
 
@@ -58,17 +68,84 @@ async def get_owned_artifact_by_user(session: AsyncSession, user_id: str, artifa
     return artifact
 
 
-async def delete_artifact(session: AsyncSession, user_id: str, artifact_id: str) -> None:
-    """Dashboard-only — there's no MCP-facing delete tool. Comments and
-    shares don't have an ORM cascade defined against Artifact (unlike
-    ArtifactVersion), so they're cleared explicitly before the artifact row
-    goes; SQLite doesn't enforce FK constraints here, but leaving orphaned
-    rows behind would still be wrong."""
-    artifact = await get_owned_artifact_by_user(session, user_id, artifact_id)
-    await session.execute(delete(Comment).where(Comment.artifact_id == artifact_id))
-    await session.execute(delete(ArtifactShare).where(ArtifactShare.artifact_id == artifact_id))
+async def _delete_artifact_rows(session: AsyncSession, artifact: Artifact) -> None:
+    """Shared by delete_artifact/admin_delete_artifact. Comments and shares
+    don't have an ORM cascade defined against Artifact (unlike
+    ArtifactVersion, which does and is handled by session.delete below), so
+    they're cleared explicitly before the artifact row goes — PRAGMA
+    foreign_keys is enforced (see db.py), so this order matters."""
+    await session.execute(delete(Comment).where(Comment.artifact_id == artifact.id))
+    await session.execute(delete(ArtifactShare).where(ArtifactShare.artifact_id == artifact.id))
     await session.delete(artifact)
     await session.commit()
+
+
+async def delete_artifact(session: AsyncSession, user_id: str, artifact_id: str) -> None:
+    """Dashboard-only — there's no MCP-facing delete tool. See
+    admin_delete_artifact for the CLI's unscoped equivalent."""
+    artifact = await get_owned_artifact_by_user(session, user_id, artifact_id)
+    await _delete_artifact_rows(session, artifact)
+
+
+async def admin_delete_artifact(session: AsyncSession, artifact_id: str) -> Artifact:
+    """CLI-only, deliberately unscoped by owner — shell access to the
+    deployed container is already the same trust boundary create-user/
+    create-token rely on, so there's no ownership check here the way
+    delete_artifact enforces for the dashboard. Never exposed as an MCP
+    tool or a dashboard route. Returns the artifact as it was immediately
+    before deletion (readable post-commit: session_scope's sessionmaker
+    has expire_on_commit=False) so the caller can report what was removed."""
+    result = await session.execute(select(Artifact).where(Artifact.id == artifact_id))
+    artifact = result.scalar_one_or_none()
+    if artifact is None:
+        raise NotFoundError(f"not_found: no artifact {artifact_id}")
+    await _delete_artifact_rows(session, artifact)
+    return artifact
+
+
+async def admin_delete_connection(session: AsyncSession, connection_id: str) -> Connection:
+    """CLI-only, deliberately unscoped by owner — same trust boundary as
+    admin_delete_artifact. Mirrors dashboard_delete_connection's guard: only
+    a revoked connection can be deleted, and only if it never published an
+    artifact, left a comment, or shared anything — a connection is never
+    deleted out from under content it created, so that content stays
+    around as history rather than vanishing as a side effect of token
+    cleanup. Doesn't touch OAuthAuthorizationCode rows (they're already
+    swept on expiry — see oauth_provider.sweep_expired_oauth_rows)."""
+    connection = (
+        await session.execute(select(Connection).where(Connection.id == connection_id))
+    ).scalar_one_or_none()
+    if connection is None:
+        raise NotFoundError(f"not_found: no connection {connection_id}")
+    if connection.revoked_at is None:
+        raise ConnectionNotRevokedError("invalid: only revoked connections can be deleted")
+
+    artifact_count = (
+        await session.execute(select(func.count()).select_from(Artifact).where(Artifact.connection_id == connection_id))
+    ).scalar_one()
+    comment_count = (
+        await session.execute(
+            select(func.count()).select_from(Comment).where(Comment.author_connection_id == connection_id)
+        )
+    ).scalar_one()
+    share_count = (
+        await session.execute(
+            select(func.count())
+            .select_from(ArtifactShare)
+            .where(ArtifactShare.shared_by_connection_id == connection_id)
+        )
+    ).scalar_one()
+    if artifact_count or comment_count or share_count:
+        raise ConnectionHasHistoryError(
+            f"invalid: connection published {artifact_count} artifact(s), left {comment_count} "
+            f"comment(s), and shared {share_count} item(s) — revoked connections keep their history"
+        )
+
+    await session.execute(delete(OAuthRefreshTokenRow).where(OAuthRefreshTokenRow.connection_id == connection_id))
+    await session.execute(delete(OAuthAccessTokenRow).where(OAuthAccessTokenRow.connection_id == connection_id))
+    await session.delete(connection)
+    await session.commit()
+    return connection
 
 
 async def reassign_artifact_connection(

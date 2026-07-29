@@ -1,6 +1,7 @@
 import asyncio
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 
 from alembic import command
@@ -15,13 +16,19 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from renderdesk.auth import MCPAuthMiddleware
+from renderdesk.auth_scheme import ensure_auth_scheme
 from renderdesk.config import settings
 from renderdesk.csrf import CSRFCookieMiddleware
 from renderdesk.dashboard import router as dashboard_router
-from renderdesk.db import engine
+from renderdesk.db import engine, session_scope
 from renderdesk.mcp_server import mcp
-from renderdesk.oauth_provider import oauth_provider
+from renderdesk.oauth_consent_state import OAuthConsentBindingMiddleware
+from renderdesk.oauth_provider import oauth_provider, sweep_expired_oauth_rows
+from renderdesk.rate_limit import RateLimitMiddleware
+from renderdesk.security_headers import SecurityHeadersMiddleware
 from renderdesk.view import router as view_router
+
+_OAUTH_SWEEP_INTERVAL = timedelta(hours=1)
 
 _mcp_asgi_app = mcp.streamable_http_app()
 
@@ -46,21 +53,44 @@ def _run_migrations() -> None:
             time.sleep(2**attempt)
 
 
+async def _oauth_sweep_loop() -> None:
+    # Nothing else ever cleans up abandoned/expired OAuth rows (pending or
+    # issued authorization codes, expired refresh tokens, registered
+    # clients that never completed a token exchange) — see
+    # oauth_provider.sweep_expired_oauth_rows.
+    while True:
+        await asyncio.sleep(_OAUTH_SWEEP_INTERVAL.total_seconds())
+        await sweep_expired_oauth_rows()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Runs synchronously (Alembic has no async API) but only once at startup,
     # so it's offloaded to a thread rather than blocking the event loop.
     await asyncio.to_thread(_run_migrations)
-    async with AsyncExitStack() as stack:
-        # streamable_http_app()'s own lifespan starts the session manager;
-        # Starlette's Mount does not forward lifespan events to sub-apps,
-        # so it has to be entered explicitly here.
-        await stack.enter_async_context(_mcp_asgi_app.router.lifespan_context(_mcp_asgi_app))
-        yield
+    # Must run after migrations (needs the app_settings table) and before
+    # anything starts serving traffic — an auth scheme mismatch is a startup
+    # failure, not a runtime one. See auth_scheme.py for why this can't just
+    # be "whatever the env var currently says."
+    async with session_scope() as session:
+        await ensure_auth_scheme(session, settings.auth_scheme)
+    sweep_task = asyncio.create_task(_oauth_sweep_loop())
+    try:
+        async with AsyncExitStack() as stack:
+            # streamable_http_app()'s own lifespan starts the session manager;
+            # Starlette's Mount does not forward lifespan events to sub-apps,
+            # so it has to be entered explicitly here.
+            await stack.enter_async_context(_mcp_asgi_app.router.lifespan_context(_mcp_asgi_app))
+            yield
+    finally:
+        sweep_task.cancel()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(CSRFCookieMiddleware)
+app.add_middleware(OAuthConsentBindingMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))

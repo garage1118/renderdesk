@@ -25,7 +25,9 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column()
+    # None for OIDC-provisioned users, who never set a password — see
+    # session_auth.verify_password and OidcIdentity below.
+    password_hash: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -195,3 +197,32 @@ class OAuthRefreshToken(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OidcIdentity(Base):
+    """Links a User to one external IdP account. issuer+subject (not email)
+    is the join key — IdP emails aren't guaranteed globally unique/stable,
+    and subject alone isn't unique across issuers. Created on first
+    successful OIDC login for that (issuer, subject) pair — see
+    dashboard.oidc_callback."""
+
+    __tablename__ = "oidc_identities"
+    __table_args__ = (UniqueConstraint("issuer", "subject", name="uq_oidc_identities_issuer_subject"),)
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    issuer: Mapped[str] = mapped_column()
+    subject: Mapped[str] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AppSetting(Base):
+    """Generic persisted key/value store for process-wide config that has to
+    survive restarts and can't just live in an env var — starting with the
+    active auth scheme (see auth_scheme.py), but a natural home for any
+    similar setting later without another migration each time."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[str] = mapped_column()

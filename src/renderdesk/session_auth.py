@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import bcrypt
 from fastapi import HTTPException, Request
@@ -43,7 +43,20 @@ def clear_failed_logins(email: str) -> None:
 
 
 def verify_password(user: User, password: str) -> bool:
-    return bcrypt.checkpw(password.encode(), user.password_hash.encode())
+    if user.password_hash is None:
+        # An OIDC-provisioned user, or an instance switched back to
+        # "password" via set-auth-scheme without one being set yet.
+        return False
+    try:
+        return bcrypt.checkpw(password.encode(), user.password_hash.encode())
+    except ValueError:
+        # bcrypt 5.x raises rather than truncating for passwords >72 bytes.
+        # Without this, that case 500s instead of failing like any other
+        # wrong password — which, since it's only reachable once a user is
+        # known to exist, is an unauthenticated account-enumeration oracle
+        # that also skips record_failed_login (the exception fires before
+        # it's called), bypassing the lockout entirely.
+        return False
 
 
 async def create_session(db_session: AsyncSession, user: User) -> str:
@@ -89,10 +102,20 @@ async def delete_session(db_session: AsyncSession, token: str) -> None:
 def safe_next_path(path: str) -> str:
     # Only ever redirect back to a same-site relative path — a `next` value
     # like "//evil.com" or "https://evil.com" would otherwise be an open
-    # redirect off the login page. all(c.isprintable()...) is defense in
-    # depth against embedded CRLF/control characters reaching a Location
-    # header, on top of whatever Starlette already rejects.
-    if path.startswith("/") and not path.startswith("//") and all(c.isprintable() for c in path):
+    # redirect off the login page. Backslashes are rejected too: browsers
+    # normalize "/\evil.com" to the protocol-relative "//evil.com" per the
+    # WHATWG URL spec, so a bare startswith("//") check alone misses it.
+    # all(c.isprintable()...) is defense in depth against embedded CRLF/
+    # control characters reaching a Location header, on top of whatever
+    # Starlette already rejects.
+    parsed = urlparse(path)
+    if (
+        not parsed.scheme
+        and not parsed.netloc
+        and path.startswith("/")
+        and "\\" not in path
+        and all(c.isprintable() for c in path)
+    ):
         return path
     return "/dashboard"
 

@@ -10,6 +10,7 @@ _tmpdir = tempfile.mkdtemp()
 atexit.register(shutil.rmtree, _tmpdir, ignore_errors=True)
 os.environ.setdefault("RENDERDESK_DATABASE_PATH", os.path.join(_tmpdir, "test.db"))
 os.environ.setdefault("RENDERDESK_PUBLIC_BASE_URL", "http://localhost:8000")
+os.environ.setdefault("RENDERDESK_AUTH_SCHEME", "password")
 
 import uuid
 from datetime import timedelta
@@ -18,6 +19,7 @@ import bcrypt
 import pytest
 
 from renderdesk.auth import hash_token
+from renderdesk.auth_scheme import ensure_auth_scheme
 from renderdesk.config import settings
 from renderdesk.db import Base, engine, session_scope
 from renderdesk.models import Connection, User, utcnow
@@ -29,6 +31,17 @@ async def _reset_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+@pytest.fixture(autouse=True)
+async def _reset_auth_scheme(_reset_db):
+    # _reset_db wipes app_settings along with everything else each test, so
+    # this re-resolves it fresh every time — most tests exercise the
+    # password-based dashboard, so "password" is the sane default; a test
+    # that needs a different active scheme can override via monkeypatch.
+    async with session_scope() as session:
+        await ensure_auth_scheme(session, "password")
     yield
 
 

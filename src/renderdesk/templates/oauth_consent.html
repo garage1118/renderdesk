@@ -12,6 +12,7 @@
     <h1>Authorize {{ client_name }}</h1>
     <p class="auth-sub">Signed in as {{ user.email }}. This will let <strong>{{ client_name }}</strong> access renderdesk on your
       behalf{% if scope %} (scope: {{ scope }}){% endif %}.</p>
+    <p class="auth-sub">Access will be granted to a client redirecting to <strong>{{ redirect_host }}</strong>. Only approve if you recognize this destination.</p>
     <form method="post" action="/oauth/consent">
       <input type="hidden" name="request_id" value="{{ request_id }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
