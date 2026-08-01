@@ -48,6 +48,7 @@ def _sign_id_token(priv_key, kid: str = KID, omit: tuple[str, ...] = (), **claim
         "aud": CLIENT_ID,
         "sub": "sub-1",
         "email": "person@example.com",
+        "email_verified": True,
         "iat": now,
         "exp": now + 300,
     }
@@ -69,6 +70,10 @@ async def _oidc_scheme(monkeypatch):
     monkeypatch.setattr(settings, "oidc_issuer_url", ISSUER)
     monkeypatch.setattr(settings, "oidc_client_id", CLIENT_ID)
     monkeypatch.setattr(settings, "oidc_client_secret", CLIENT_SECRET)
+    # Most tests here exercise the login flow itself, not the signup gate —
+    # default it open and let the one test that cares about the gate
+    # (test_new_user_signup_rejected_when_allow_signup_disabled) override it.
+    monkeypatch.setattr(settings, "oidc_allow_signup", True)
     oidc._discovery_cache = None
     oidc._jwks_cache = None
     oidc._jwks_cache_at = 0.0
@@ -169,24 +174,48 @@ async def test_second_login_same_subject_reuses_user_no_duplicate(client, idp):
         assert len(identities) == 1
 
 
-async def test_existing_password_user_gets_linked_by_email(client, idp):
+async def test_existing_password_user_with_matching_email_is_rejected_not_auto_linked(client, idp):
+    # Auto-linking a first-time IdP login to an existing account by verified
+    # email was deliberately removed (see the "harden auth surface" commit):
+    # it let anyone who controls an IdP account's email claim silently take
+    # over the matching local account. A collision must fail clean, with no
+    # new identity/user created — manual linking is out of scope here.
     priv_key, id_token_holder = idp
     existing_user_id = await make_user(email="already-here@example.com", password="somepassword")
 
     state, nonce = await _start_login(client)
     id_token_holder["token"] = _sign_id_token(priv_key, nonce=nonce, sub="sub-linked", email="already-here@example.com")
     resp = await _callback(client, state)
-    assert resp.status_code == 303
+    assert resp.status_code == 400
+    assert "renderdesk_session" not in resp.cookies
+    assert "Contact an administrator" in resp.text
 
     async with session_scope() as session:
         identity = (
             await session.execute(select(OidcIdentity).where(OidcIdentity.subject == "sub-linked"))
-        ).scalar_one()
-        assert identity.user_id == existing_user_id
+        ).scalar_one_or_none()
+        assert identity is None
         users = (
             await session.execute(select(User).where(User.email == "already-here@example.com"))
         ).scalars().all()
-        assert len(users) == 1  # no duplicate User row created
+        assert len(users) == 1
+        assert users[0].id == existing_user_id  # untouched, no duplicate created
+
+
+async def test_new_user_signup_rejected_when_allow_signup_disabled(client, idp, monkeypatch):
+    monkeypatch.setattr(settings, "oidc_allow_signup", False)
+    priv_key, id_token_holder = idp
+    state, nonce = await _start_login(client)
+    id_token_holder["token"] = _sign_id_token(priv_key, nonce=nonce, sub="sub-blocked", email="blocked@example.com")
+
+    resp = await _callback(client, state)
+    assert resp.status_code == 400
+    assert "renderdesk_session" not in resp.cookies
+    assert "Contact an administrator" in resp.text
+
+    async with session_scope() as session:
+        user = (await session.execute(select(User).where(User.email == "blocked@example.com"))).scalar_one_or_none()
+        assert user is None
 
 
 async def test_missing_email_falls_back_to_preferred_username(client, idp):

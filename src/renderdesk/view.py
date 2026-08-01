@@ -1,4 +1,6 @@
+import csv
 import html as html_escape
+import io
 import re
 from collections.abc import Sequence
 
@@ -58,16 +60,45 @@ _KATEX_ASSETS = (
     '<script src="/static/katex-init.js"></script>'
 )
 
+# Same light/dark token values as static/styles.css's :root / [data-theme=dark]
+# — duplicated rather than linked, matching this project's existing "each
+# artifact-render page is small and self-contained" pattern (see mermaid/
+# katex, both fully vendored rather than shared). Only the subset these
+# monospace-flavored pages actually use. theme.js (same script, unchanged)
+# resolves data-theme from localStorage/system preference and must run
+# before anything that reads the attribute — mermaid-init.js in particular.
+_THEME_TOKENS_CSS = (
+    "<style>:root{--font-mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;"
+    "--bg:oklch(97% 0.008 95);--surface-2:oklch(94.5% 0.012 95);--border:oklch(88% 0.014 95);"
+    "--text:oklch(24% 0.02 95);--text-muted:oklch(48% 0.02 95);"
+    "--accent:oklch(72% 0.15 155);--accent-strong:oklch(58% 0.15 155);color-scheme:light}"
+    'html[data-theme="dark"]{--bg:oklch(19% 0.015 95);--surface-2:oklch(28.5% 0.018 95);'
+    "--border:oklch(33% 0.02 95);--text:oklch(93% 0.01 95);--text-muted:oklch(67% 0.02 95);"
+    "--accent:oklch(76% 0.15 155);--accent-strong:oklch(84% 0.14 155);color-scheme:dark}"
+    "body{background:var(--bg);color:var(--text)}a{color:var(--accent-strong)}</style>"
+)
+_THEME_SCRIPT = '<script src="/static/theme.js"></script>'
+
 # Code blocks are highlighted server-side (Pygments) rather than via a
 # vendored client-side highlighter — it needs zero CSP loosening (static
 # colored spans, no script), unlike mermaid/math which both execute
-# same-origin JS. "monokai" matches the dark theme used elsewhere
-# (mermaid's theme: "dark", the dashboard's dark background).
+# same-origin JS. Paired styles, "friendly"/"monokai", are Pygments'
+# built-in light/dark counterparts (same pairing convention many doc
+# themes use) — both style-defs rulesets are always emitted, scoped so the
+# active one follows data-theme purely via CSS, no re-highlighting needed
+# (the token->class mapping is fixed regardless of which formatter's style
+# generates the markup, so either formatter works for the highlight() call
+# itself).
 _pygments_formatter = HtmlFormatter(nowrap=True, style="monokai")
+_PYGMENTS_LIGHT_STYLE = HtmlFormatter(nowrap=True, style="friendly")
+_PYGMENTS_DARK_STYLE = _pygments_formatter
 _PYGMENTS_CLASSES = set(STANDARD_TYPES.values())
 _PYGMENTS_CSS = (
-    "<style>.codehilite{background:#1e1e1e;color:#f8f8f2;padding:1rem;"
-    "border-radius:6px;overflow-x:auto}" + _pygments_formatter.get_style_defs() + "</style>"
+    "<style>.codehilite{background:var(--surface-2);color:var(--text);padding:1rem;"
+    "border-radius:6px;overflow-x:auto}"
+    + _PYGMENTS_LIGHT_STYLE.get_style_defs(".codehilite")
+    + _PYGMENTS_DARK_STYLE.get_style_defs('html[data-theme="dark"] .codehilite')
+    + "</style>"
 )
 
 
@@ -92,21 +123,60 @@ def render_highlighted_source(content: str, language: str | None) -> tuple[str, 
     return f"<pre>{html_escape.escape(content)}</pre>", ""
 
 
-def _page_csp(has_mermaid: bool, has_math: bool) -> str:
-    # Scripts/fonts/external styles stay off entirely for ordinary markdown
-    # (it's sanitized, not executable, by design) — each directive is only
-    # loosened for the specific same-origin vendored asset that needs it,
-    # never an external CDN.
+def _page_csp(has_math: bool) -> str:
+    # Scripts/fonts/external styles stay off entirely beyond what's actually
+    # used — each directive is only loosened for the specific same-origin
+    # vendored asset that needs it, never an external CDN. script-src 'self'
+    # is unconditional now: theme.js (light/dark tokens) loads on every one
+    # of these pages, not just the ones with mermaid/math/csv-resize.
     style_src = "'unsafe-inline'" + (" 'self'" if has_math else "")  # 'self' for the vendored katex.min.css link
-    parts = ["default-src 'none'", f"style-src {style_src}", "img-src data: blob:", "frame-ancestors 'self'"]
-    if has_mermaid or has_math:
-        parts.append("script-src 'self'")
+    parts = [
+        "default-src 'none'",
+        f"style-src {style_src}",
+        "img-src data: blob:",
+        "frame-ancestors 'self'",
+        "script-src 'self'",
+    ]
     if has_math:
         parts.append("font-src 'self'")  # katex.min.css loads its own woff2 fonts
     return "; ".join(parts)
 
 
-_PAGE_CSP = _page_csp(has_mermaid=False, has_math=False)
+_PAGE_CSP = _page_csp(has_math=False)
+
+_CSV_ASSETS = '<script src="/static/csv-table-init.js"></script>'
+_CSV_CSS = (
+    "<style>body{font-family:var(--font-mono, monospace);margin:0;padding:1rem}"
+    ".csv-table{border-collapse:collapse;font-family:var(--font-mono, monospace);font-size:0.9rem}"
+    ".csv-table th,.csv-table td{border:1px solid var(--border);padding:4px 8px;text-align:left;"
+    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+    ".csv-table th{background:var(--surface-2);position:relative}"
+    ".csv-col-resize-handle{position:absolute;top:0;right:0;width:6px;height:100%;"
+    "cursor:col-resize;user-select:none}"
+    ".csv-col-resize-handle:hover{background:var(--accent)}</style>"
+)
+
+
+def _render_csv_table(content: str) -> str:
+    """Turn CSV content into a plain HTML table — no nh3 needed, every cell
+    goes through html.escape and this only ever builds a fixed table
+    skeleton, never arbitrary parsed markup (same trust model as
+    render_highlighted_source above). First row is treated as a header,
+    matching Claude's own CSV artifact preview and how agent-generated CSVs
+    are typically shaped. Column-resize handles are added client-side by
+    csv-table-init.js, not here."""
+    rows = list(csv.reader(io.StringIO(content)))
+    if not rows:
+        return "<p>(empty)</p>"
+
+    def _row(cells: list[str], tag: str) -> str:
+        cells_html = "".join(f"<{tag}>{html_escape.escape(c)}</{tag}>" for c in cells)
+        return f"<tr>{cells_html}</tr>"
+
+    header, *body = rows
+    thead = f"<thead>{_row(header, 'th')}</thead>"
+    tbody = "<tbody>" + "".join(_row(r, "td") for r in body) + "</tbody>"
+    return f'<table class="csv-table">{thead}{tbody}</table>'
 
 
 def _fence_with_extras(
@@ -221,9 +291,11 @@ async def view_artifact(artifact_id: str) -> Response:
 
         title = html_escape.escape(artifact.title or "Untitled")
         style = _PYGMENTS_CSS if env.get("has_code_block") else ""
-        assets = (_MERMAID_ASSETS if has_mermaid else "") + (_KATEX_ASSETS if has_math else "")
-        csp = _page_csp(has_mermaid, has_math)
-        body = f"<!doctype html><title>{title}</title>{style}{assets}<body>{rendered}</body>"
+        # theme.js first — mermaid-init.js reads documentElement's data-theme
+        # attribute at mermaid.initialize() time, so it must already be set.
+        assets = _THEME_SCRIPT + (_MERMAID_ASSETS if has_mermaid else "") + (_KATEX_ASSETS if has_math else "")
+        csp = _page_csp(has_math)
+        body = f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{style}{assets}<body>{rendered}</body>"
         return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": csp})
 
     if artifact.format == ArtifactFormat.code:
@@ -234,15 +306,27 @@ async def view_artifact(artifact_id: str) -> Response:
         title = html_escape.escape(artifact.title or "Untitled")
         safe_id = html_escape.escape(artifact_id)
         body = (
-            f"<!doctype html><title>{title}</title>{style}"
+            f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{style}{_THEME_SCRIPT}"
             f'<body><p><a href="/a/{safe_id}/raw">View raw</a></p>{code_html}</body>'
+        )
+        return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
+
+    if artifact.format == ArtifactFormat.csv:
+        # Read-only table view, never executed.
+        table_html = _render_csv_table(artifact.content)
+
+        title = html_escape.escape(artifact.title or "Untitled")
+        safe_id = html_escape.escape(artifact_id)
+        body = (
+            f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{_CSV_CSS}{_THEME_SCRIPT}"
+            f'<body><p><a href="/a/{safe_id}/raw">View raw</a></p>{table_html}{_CSV_ASSETS}</body>'
         )
         return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
 
     title = html_escape.escape(artifact.title or "Untitled")
     safe_id = html_escape.escape(artifact_id)
     page = (
-        f"<!doctype html><title>{title}</title>"
+        f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{_THEME_SCRIPT}"
         "<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style>"
         f'<iframe sandbox="allow-scripts" src="/a/{safe_id}/raw"></iframe>'
     )
@@ -265,6 +349,15 @@ async def view_artifact_raw(artifact_id: str) -> Response:
         return Response(
             content=artifact.content,
             media_type="text/plain",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
+
+    if artifact.format == ArtifactFormat.csv:
+        # Exact source, no table rendering — text/csv never executes, so no
+        # CSP header is needed here, same reasoning as the code branch above.
+        return Response(
+            content=artifact.content,
+            media_type="text/csv",
             headers={"X-Content-Type-Options": "nosniff"},
         )
 

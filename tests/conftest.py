@@ -23,6 +23,7 @@ from renderdesk.auth_scheme import ensure_auth_scheme
 from renderdesk.config import settings
 from renderdesk.db import Base, engine, session_scope
 from renderdesk.models import Connection, User, utcnow
+from renderdesk.rate_limit import _attempts as _rate_limit_attempts
 from renderdesk.session_auth import _failed_logins
 
 
@@ -47,10 +48,15 @@ async def _reset_auth_scheme(_reset_db):
 
 @pytest.fixture(autouse=True)
 def _reset_login_rate_limit():
-    # The login lockout tracker is in-process module state (see
-    # session_auth.py), not DB-backed — clear it between tests so one test's
-    # failed logins can't lock out an email reused by another.
+    # Both trackers are in-process module state (session_auth.py,
+    # rate_limit.py), not DB-backed, so _reset_db doesn't touch them —
+    # clear explicitly between tests. Matters for _attempts especially:
+    # httpx.ASGITransport gives every test request the same fixed
+    # client.host ("127.0.0.1"), so RateLimitMiddleware's per-IP login
+    # bucket would otherwise accumulate across the whole suite and start
+    # 429-ing real logins partway through an unrelated test file.
     _failed_logins.clear()
+    _rate_limit_attempts.clear()
     yield
 
 

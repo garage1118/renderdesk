@@ -27,14 +27,15 @@ mcp = FastMCP("renderdesk", streamable_http_path="/", transport_security=_transp
 @mcp.tool()
 async def publish_artifact(
     content: str,
-    format: Literal["html", "markdown", "code"],
+    format: Literal["html", "markdown", "code", "csv"],
     title: str | None = None,
     language: str | None = None,
 ) -> dict:
-    """Publish a new self-contained HTML, Markdown, or Code artifact and get back a shareable
-    URL. For format="code", content is rendered read-only with syntax highlighting (not
-    executed) — pass language (e.g. "python", "rust") to drive highlighting; an omitted or
-    unrecognized language falls back to plain text."""
+    """Publish a new self-contained HTML, Markdown, Code, or CSV artifact and get back a
+    shareable URL. For format="code", content is rendered read-only with syntax highlighting
+    (not executed) — pass language (e.g. "python", "rust") to drive highlighting; an omitted or
+    unrecognized language falls back to plain text. For format="csv", content is rendered as an
+    HTML table (first row treated as a header) with drag-resizable columns."""
     connection_id = get_current_connection_id()
     async with session_scope() as session:
         return await tools.publish_artifact(session, connection_id, content, format, title, language)
@@ -45,7 +46,7 @@ async def update_artifact(
     artifact_id: str,
     content: str,
     base_version: int,
-    format: Literal["html", "markdown", "code"] | None = None,
+    format: Literal["html", "markdown", "code", "csv"] | None = None,
     title: str | None = None,
     language: str | None = None,
 ) -> dict:

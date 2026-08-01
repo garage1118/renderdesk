@@ -18,6 +18,7 @@ class ArtifactFormat(enum.StrEnum):
     html = "html"
     markdown = "markdown"
     code = "code"
+    csv = "csv"
 
 
 class User(Base):

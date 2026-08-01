@@ -34,7 +34,7 @@ def _parse_format(format: str) -> ArtifactFormat:
     try:
         return ArtifactFormat(format)
     except ValueError:
-        raise ValueError(f"invalid format {format!r}: must be 'html', 'markdown', or 'code'") from None
+        raise ValueError(f"invalid format {format!r}: must be 'html', 'markdown', 'code', or 'csv'") from None
 
 
 def _artifact_url(artifact_id: str) -> str:

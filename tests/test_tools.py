@@ -139,6 +139,25 @@ async def test_publish_code_artifact_with_language_round_trips():
     assert listing[0]["language"] == "python"
 
 
+async def test_publish_csv_artifact_round_trips():
+    connection_id = await make_connection()
+    content = "name,age\nAda,36\n"
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, content, "csv", "people.csv")
+
+    async with session_scope() as session:
+        fetched = await tools.get_artifact(session, connection_id, published["artifact_id"], include_content=True)
+    assert fetched["format"] == "csv"
+    assert fetched["content"] == content
+
+
+async def test_publish_rejects_invalid_format():
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        with pytest.raises(ValueError, match="must be 'html', 'markdown', 'code', or 'csv'"):
+            await tools.publish_artifact(session, connection_id, "x", "yaml")
+
+
 async def test_list_artifacts_offset_pages_through_results():
     connection_id = await make_connection()
     async with session_scope() as session:
