@@ -118,3 +118,28 @@ async def share_artifact(artifact_id: str, email: str) -> dict:
     connection_id = get_current_connection_id()
     async with session_scope() as session:
         return await shares.share_artifact(session, connection_id, artifact_id, email)
+
+
+@mcp.prompt(name="publish_artifact")
+def publish_artifact_prompt(content: str, title: str = "") -> str:
+    """Publish content to renderdesk, choosing the right artifact format and
+    avoiding the self-contained-HTML CSP gotcha."""
+    return (
+        "Publish the following content to renderdesk using the `publish_artifact` tool.\n\n"
+        "Format guidance:\n"
+        "- Prefer `markdown` for text-heavy content — it supports fenced ```mermaid``` "
+        "diagrams and $...$/$$...$$ KaTeX math out of the box, and is rendered "
+        "server-side (never executes script).\n"
+        "- Use `html` only when custom layout, styling, or interactivity is actually "
+        "needed beyond what markdown covers. renderdesk serves html artifacts inside a "
+        "sandboxed iframe with a CSP that blocks all outbound network from the artifact "
+        "(no CDN scripts/fonts/images/fetch) — every dependency must be inlined or "
+        "embedded as a data URI, or it silently fails to load with no visible error.\n"
+        "- Use `code` for read-only syntax-highlighted source; pass `language` (e.g. "
+        '"python") — an unrecognized or omitted language falls back to plain text.\n'
+        "- Use `csv` for tabular data; the first row is treated as the header.\n\n"
+        f"Title: {title or '(infer a short, descriptive title from the content)'}\n\n"
+        "Content to publish:\n---\n"
+        f"{content}\n"
+        "---"
+    )

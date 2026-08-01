@@ -4,4 +4,4 @@ __pycache__/
 data/*.db
 .env
 *.egg-info/
-DESIGN_NOTES.md
+CLAUDE.local.md

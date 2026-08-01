@@ -1,0 +1,800 @@
+#!/usr/bin/env python3
+"""
+MCP Server Load Testing Tool for RenderDesk.
+
+Simulates multiple concurrent MCP agents to measure server performance
+under load. Reports latency percentiles (p50/p95/p99), throughput (TPS),
+and error rates per tool and overall.
+
+Usage:
+  # Single token (all agents share it)
+  uv run tools/load_test_mcp --token <token>
+
+  # Per-agent tokens (one per line in a file)
+  uv run tools/load_test_mcp --token-file tokens.txt
+
+  # Ramp-up, stress, soak
+  uv run tools/load_test_mcp --token-file tokens.txt --phase stress --concurrency 25 --duration 120
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import random
+import sys
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from statistics import quantiles
+from typing import Any
+
+import httpx
+
+TOOLS = [
+    "publish_artifact",
+    "get_artifact",
+    "list_artifacts",
+    "list_comments",
+    "reply_to_comment",
+    "resolve_comment_thread",
+    "share_artifact",
+]
+
+DEFAULT_WEIGHTS: dict[str, float] = {
+    "publish_artifact": 20,
+    "get_artifact": 30,
+    "list_artifacts": 25,
+    "list_comments": 5,
+    "reply_to_comment": 5,
+    "resolve_comment_thread": 5,
+    "share_artifact": 10,
+}
+
+SAMPLE_SMALL = "# Hello\n\nLoad test artifact.\n"
+SAMPLE_LARGE = ("# " + "x" * 1000 + "\n") * 50  # ~50 KB
+SEED_EMAIL = "loadtest-seed@example.com"
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CallRecord:
+    tool: str
+    duration: float
+    success: bool
+    error: str | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+    token_idx: int = 0
+
+
+@dataclass
+class PhaseResult:
+    name: str
+    concurrency_level: int
+    wall_seconds: float
+    tokens_used: int
+    calls: list[CallRecord] = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.calls)
+
+    @property
+    def successes(self) -> int:
+        return sum(1 for c in self.calls if c.success)
+
+    @property
+    def errors(self) -> int:
+        return self.total - self.successes
+
+    @property
+    def error_rate(self) -> float:
+        return self.errors / self.total * 100 if self.total else 0.0
+
+    @property
+    def throughput(self) -> float:
+        return self.total / self.wall_seconds if self.wall_seconds else 0.0
+
+    def _latencies(self) -> list[float]:
+        return [c.duration for c in self.calls if c.success]
+
+    def summary(self) -> dict[str, Any]:
+        lat = self._latencies()
+        result: dict[str, Any] = {
+            "total_calls": self.total,
+            "successes": self.successes,
+            "errors": self.errors,
+            "error_rate_pct": round(self.error_rate, 2),
+            "wall_seconds": round(self.wall_seconds, 1),
+            "throughput_tps": round(self.throughput, 2),
+            "tokens_used": self.tokens_used,
+        }
+        if lat:
+            lat.sort()
+            result["latency_ms"] = {
+                "min": round(lat[0] * 1000, 1),
+                "p50": round(quantiles(lat, n=2)[0] * 1000, 1),
+                "p95": round(quantiles(lat, n=20)[18] * 1000, 1) if len(lat) >= 20 else round(lat[-1] * 1000, 1),
+                "p99": round(quantiles(lat, n=100)[98] * 1000, 1) if len(lat) >= 100 else round(lat[-1] * 1000, 1),
+                "max": round(lat[-1] * 1000, 1),
+            }
+        else:
+            result["latency_ms"] = None
+
+        per_tool: dict[str, dict[str, Any]] = {}
+        for tool in TOOLS:
+            tc = [c for c in self.calls if c.tool == tool]
+            if not tc:
+                continue
+            tl = [c.duration for c in tc if c.success]
+            te = sum(1 for c in tc if not c.success)
+            entry: dict[str, Any] = {
+                "count": len(tc),
+                "errors": te,
+            }
+            if tl:
+                tl.sort()
+                entry["latency_ms"] = {
+                    "p50": round(quantiles(tl, n=2)[0] * 1000, 1),
+                    "p95": round(quantiles(tl, n=20)[18] * 1000, 1) if len(tl) >= 20 else round(tl[-1] * 1000, 1),
+                    "p99": round(quantiles(tl, n=100)[98] * 1000, 1) if len(tl) >= 100 else round(tl[-1] * 1000, 1),
+                }
+            per_tool[tool] = entry
+        result["per_tool"] = per_tool
+        return result
+
+    def print_summary(self, indent: str = "") -> None:
+        s = self.summary()
+        print(f"{indent}  Calls: {s['total_calls']}  |  "
+              f"Errors: {s['errors']} ({s['error_rate_pct']}%)  |  "
+              f"Tokens: {s['tokens_used']}")
+        print(f"{indent}  Wall: {s['wall_seconds']}s  |  "
+              f"Throughput: {s['throughput_tps']} t/s")
+        if s["latency_ms"]:
+            lm = s["latency_ms"]
+            print(f"{indent}  Latency (ms):  min={lm['min']}  "
+                  f"p50={lm['p50']}  p95={lm['p95']}  p99={lm['p99']}  max={lm['max']}")
+        print(f"{indent}  Per tool:")
+        for tool, ts in s["per_tool"].items():
+            lat_str = ""
+            if "latency_ms" in ts:
+                lat_entry = ts["latency_ms"]
+                lat_str = f"  p50={lat_entry['p50']}  p95={lat_entry['p95']}  p99={lat_entry['p99']}"
+            print(f"{indent}    {tool:25s}  count={ts['count']:>5d}  "
+                  f"err={ts['errors']:>3d}{lat_str}")
+
+
+# ---------------------------------------------------------------------------
+# MCP helpers
+# ---------------------------------------------------------------------------
+
+_request_id = 0
+
+
+def _next_id() -> int:
+    global _request_id
+    _request_id += 1
+    return _request_id
+
+
+def _parse_sse_response(text: str) -> dict[str, Any]:
+    """Parse an SSE-stream body and return the last JSON-RPC message dict."""
+    result: dict[str, Any] = {}
+    data_parts: list[str] = []
+    for line in text.split("\n"):
+        if line.startswith("data: "):
+            data_parts.append(line[6:])
+        elif line == "" and data_parts:
+            raw = "".join(data_parts)
+            data_parts = []
+            if raw:
+                try:
+                    result = json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+    if data_parts:
+        raw = "".join(data_parts)
+        if raw:
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+    return result
+
+
+async def mcp_request(
+    client: httpx.AsyncClient,
+    url: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], httpx.Headers]:
+    body: dict[str, Any] = {"jsonrpc": "2.0", "id": _next_id(), "method": method}
+    if params is not None:
+        body["params"] = params
+    resp = await client.post(url, json=body)
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        return _parse_sse_response(resp.text), resp.headers
+    if resp.content:
+        return resp.json(), resp.headers
+    return {}, resp.headers
+
+
+async def mcp_notification(
+    client: httpx.AsyncClient,
+    url: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> None:
+    body: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+    if params is not None:
+        body["params"] = params
+    resp = await client.post(url, json=body)
+    resp.raise_for_status()
+
+
+def _parse_mcp_result(response: dict[str, Any]) -> Any:
+    if "error" in response:
+        msg = response["error"].get("message", str(response["error"]))
+        raise RuntimeError(msg)
+    content = response.get("result", {}).get("content", [])
+    if not content:
+        return None
+    text = content[0].get("text", "")
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return text
+
+
+def _tool_arguments(tool: str, state: dict[str, Any], token_idx: int) -> dict[str, Any]:
+    pool = state["artifacts_by_token"].get(token_idx, [])
+    comment_pool = state["comments_by_token"].get(token_idx, [])
+
+    if tool == "publish_artifact":
+        size = random.choice(["small", "large"])
+        fmt = random.choice(["html", "markdown", "code"])
+        if fmt == "code":
+            return {
+                "content": "print('hello')" if size == "small" else "import this\n",
+                "format": "code",
+                "language": random.choice(["python", "rust", "javascript"]),
+                "title": f"loadtest-{token_idx}-{random.randrange(100000)}",
+            }
+        return {
+            "content": SAMPLE_SMALL if size == "small" else SAMPLE_LARGE,
+            "format": fmt,
+            "title": f"loadtest-{token_idx}-{random.randrange(100000)}",
+        }
+
+    if tool == "get_artifact":
+        aid = random.choice(pool) if pool else _noop_artifact_id()
+        return {"artifact_id": aid}
+
+    if tool == "list_artifacts":
+        return {"limit": random.choice([10, 25, 50]), "offset": 0}
+
+    if tool == "list_comments":
+        aid = random.choice(pool) if pool else _noop_artifact_id()
+        return {"artifact_id": aid, "include_resolved": random.choice([True, False])}
+
+    if tool == "reply_to_comment":
+        cid = random.choice(comment_pool) if comment_pool else _noop_comment_id()
+        return {"comment_id": cid, "body": f"Load test reply {random.randrange(10000)}"}
+
+    if tool == "resolve_comment_thread":
+        cid = random.choice(comment_pool) if comment_pool else _noop_comment_id()
+        return {"comment_id": cid}
+
+    if tool == "share_artifact":
+        aid = random.choice(pool) if pool else _noop_artifact_id()
+        return {"artifact_id": aid, "email": state.get("other_email", "nobody@example.com")}
+
+    return {}
+
+
+def _noop_artifact_id() -> str:
+    return "00000000-0000-0000-0000-000000000000"
+
+
+def _noop_comment_id() -> str:
+    return "00000000-0000-0000-0000-000000000000"
+
+
+# ---------------------------------------------------------------------------
+# Agent simulation
+# ---------------------------------------------------------------------------
+
+
+async def run_agent(
+    agent_id: int,
+    token_idx: int,
+    url: str,
+    headers: dict[str, str],
+    stop_event: asyncio.Event,
+    weights: dict[str, float],
+    state: dict[str, Any],
+    results: list[CallRecord],
+    tool_list: list[str],
+    tool_probs: list[float],
+    timeout: float,
+) -> None:
+    async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(timeout), follow_redirects=True) as client:
+        try:
+            init_data, init_headers = await mcp_request(client, url, "initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "renderdesk-loadtest", "version": "1.0"},
+            })
+            if "error" in init_data:
+                return
+            session_id = init_headers.get("mcp-session-id")
+            if session_id:
+                client.headers["mcp-session-id"] = session_id
+            await mcp_notification(client, url, "notifications/initialized")
+        except Exception as exc:
+            print(f"  [agent {agent_id}] connect failed: {exc}", file=sys.stderr)
+            return
+
+        while not stop_event.is_set():
+            tool = random.choices(tool_list, weights=tool_probs, k=1)[0]
+            args = _tool_arguments(tool, state, token_idx)
+
+            start = time.monotonic()
+            try:
+                resp_data, _resp_headers = await mcp_request(
+                    client, url, "tools/call", {"name": tool, "arguments": args}
+                )
+                dur = time.monotonic() - start
+                if "error" not in resp_data:
+                    record = CallRecord(tool=tool, duration=dur, success=True, token_idx=token_idx)
+                    try:
+                        result = _parse_mcp_result(resp_data)
+                        if isinstance(result, dict):
+                            record.detail = result
+                    except Exception:
+                        pass
+                else:
+                    err_msg = resp_data["error"].get("message", str(resp_data["error"]))
+                    record = CallRecord(tool=tool, duration=dur, success=False, error=err_msg, token_idx=token_idx)
+            except httpx.TimeoutException:
+                dur = time.monotonic() - start
+                record = CallRecord(tool=tool, duration=dur, success=False, error="timeout", token_idx=token_idx)
+            except httpx.HTTPStatusError as exc:
+                dur = time.monotonic() - start
+                record = CallRecord(tool=tool, duration=dur, success=False, error=f"http_{exc.response.status_code}", token_idx=token_idx)
+            except Exception as exc:
+                dur = time.monotonic() - start
+                record = CallRecord(tool=tool, duration=dur, success=False, error=str(exc), token_idx=token_idx)
+
+            results.append(record)
+
+            if record.success and tool == "publish_artifact":
+                aid = record.detail.get("artifact_id")
+                if aid:
+                    state["artifacts_by_token"][token_idx].append(aid)
+                if aid and token_idx == 0:
+                    state["seeded_artifact_ids"].append(aid)
+
+
+# ---------------------------------------------------------------------------
+# Phase runners
+# ---------------------------------------------------------------------------
+
+
+def _headers_for_token(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+
+
+def _assign_tokens(tokens: list[str], concurrency: int) -> list[int]:
+    """Map each agent to a token index, cycling through available tokens."""
+    return [i % len(tokens) for i in range(concurrency)]
+
+
+async def run_phase(
+    name: str,
+    url: str,
+    tokens: list[str],
+    concurrency: int,
+    duration: float,
+    weights: dict[str, float],
+    state: dict[str, Any],
+    timeout: float,
+) -> PhaseResult:
+    """Run a fixed-concurrency test phase with per-agent token assignment."""
+    assigned_indices = _assign_tokens(tokens, concurrency)
+    n_tokens_used = len(set(assigned_indices))
+
+    tool_list = list(weights.keys())
+    tool_probs = [weights[t] for t in tool_list]
+
+    stop_event = asyncio.Event()
+    results: list[CallRecord] = []
+
+    agents = [
+        run_agent(
+            i, token_idx, url, _headers_for_token(tokens[token_idx]),
+            stop_event, weights, state, results,
+            tool_list, tool_probs, timeout,
+        )
+        for i, token_idx in enumerate(assigned_indices)
+    ]
+
+    start = time.monotonic()
+    gather_task = asyncio.gather(*agents, return_exceptions=True)
+    await asyncio.sleep(duration)
+    stop_event.set()
+    await gather_task
+    wall = time.monotonic() - start
+
+    total_pool = sum(len(v) for v in state["artifacts_by_token"].values())
+    print(f"  Agents: {concurrency}  |  Tokens: {n_tokens_used}  |  "
+          f"Duration: {duration}s  |  "
+          f"Calls: {len(results)}  |  "
+          f"Artifact pool: {total_pool}")
+
+    return PhaseResult(
+        name=name, concurrency_level=concurrency,
+        wall_seconds=wall, tokens_used=n_tokens_used, calls=results,
+    )
+
+
+async def run_ramp_phase(
+    url: str,
+    tokens: list[str],
+    max_concurrency: int,
+    ramp_duration: float,
+    weights: dict[str, float],
+    state: dict[str, Any],
+    timeout: float,
+) -> list[PhaseResult]:
+    phases: list[PhaseResult] = []
+    steps = min(max_concurrency, 10)
+
+    for step in range(1, steps + 1):
+        c = int(max_concurrency * step / steps)
+        c = max(c, 1)
+        dur = ramp_duration / steps
+        name = f"ramp-{c}"
+        result = await run_phase(name, url, tokens, c, dur, weights, state, timeout)
+        phases.append(result)
+        print()
+
+    return phases
+
+
+async def run_all_phases(
+    url: str,
+    tokens: list[str],
+    max_concurrency: int,
+    stress_duration: float,
+    soak_duration: float,
+    weights: dict[str, float],
+    state: dict[str, Any],
+    timeout: float,
+) -> list[PhaseResult]:
+    all_results: list[PhaseResult] = []
+
+    print("\n=== Phase 1: Baseline (1 agent) ===")
+    r = await run_phase("baseline", url, tokens, 1, 30, weights, state, timeout)
+    all_results.append(r)
+    print()
+
+    print(f"=== Phase 2: Ramp-up (1 -> {max_concurrency}) ===")
+    ramp_results = await run_ramp_phase(url, tokens, max_concurrency, 60, weights, state, timeout)
+    all_results.extend(ramp_results)
+    print()
+
+    print(f"=== Phase 3: Stress ({max_concurrency} agents, {stress_duration}s) ===")
+    r = await run_phase("stress", url, tokens, max_concurrency, stress_duration, weights, state, timeout)
+    all_results.append(r)
+    print()
+
+    soak_c = max(5, min(max_concurrency // 2, len(tokens)))
+    print(f"=== Phase 4: Soak ({soak_c} agents, {soak_duration}s) ===")
+    r = await run_phase("soak", url, tokens, soak_c, soak_duration, weights, state, timeout)
+    all_results.append(r)
+    print()
+
+    return all_results
+
+
+# ---------------------------------------------------------------------------
+# Seeding
+# ---------------------------------------------------------------------------
+
+
+async def seed_server(
+    url: str,
+    token: str,
+    count: int,
+    timeout: float,
+    other_email: str | None,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "artifacts_by_token": defaultdict(list),
+        "comments_by_token": defaultdict(list),
+        "seeded_artifact_ids": [],
+        "other_email": other_email or SEED_EMAIL,
+    }
+
+    headers = _headers_for_token(token)
+
+    print(f"Seeding: creating {count} artifacts ... ", end="", flush=True)
+
+    async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(timeout), follow_redirects=True) as client:
+        init_data, init_headers = await mcp_request(client, url, "initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "renderdesk-loadtest-seed", "version": "1.0"},
+        })
+        if "error" in init_data:
+            print(f"seed init failed: {init_data['error']}")
+            sys.exit(1)
+        session_id = init_headers.get("mcp-session-id")
+        if session_id:
+            client.headers["mcp-session-id"] = session_id
+        await mcp_notification(client, url, "notifications/initialized")
+
+        for i in range(count):
+            fmt = random.choice(["html", "markdown", "code"])
+            if fmt == "code":
+                args = {
+                    "content": f"print('artifact {i}')\n",
+                    "format": "code",
+                    "language": "python",
+                    "title": f"seed-{i}",
+                }
+            else:
+                args = {
+                    "content": f"<h1>Seed {i}</h1>" if fmt == "html" else f"# Seed {i}\n\nBody.\n",
+                    "format": fmt,
+                    "title": f"seed-{i}",
+                }
+            resp_data, _resp_headers = await mcp_request(
+                client, url, "tools/call", {"name": "publish_artifact", "arguments": args}
+            )
+            if "error" not in resp_data:
+                try:
+                    result = _parse_mcp_result(resp_data)
+                    if isinstance(result, dict) and "artifact_id" in result:
+                        state["artifacts_by_token"][0].append(result["artifact_id"])
+                        state["seeded_artifact_ids"].append(result["artifact_id"])
+                except Exception:
+                    pass
+
+            if (i + 1) % 50 == 0:
+                print(f"{i + 1}...", end="", flush=True)
+
+    print(f" done ({len(state['artifacts_by_token'][0])} created)")
+
+    if len(state["artifacts_by_token"][0]) > 0:
+        print("Seeding: creating comment threads ... ", end="", flush=True)
+        async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(timeout), follow_redirects=True) as client:
+            init_data, init_headers = await mcp_request(client, url, "initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "renderdesk-loadtest-seed", "version": "1.0"},
+            })
+            session_id = init_headers.get("mcp-session-id")
+            if session_id:
+                client.headers["mcp-session-id"] = session_id
+            await mcp_notification(client, url, "notifications/initialized")
+
+            for aid in state["artifacts_by_token"][0][:10]:
+                resp_data, _resp_headers = await mcp_request(client, url, "tools/call", {
+                    "name": "reply_to_comment",
+                    "arguments": {
+                        "comment_id": aid,
+                        "body": f"Seed comment on {aid[:8]}",
+                    },
+                })
+                if "error" not in resp_data:
+                    try:
+                        result = _parse_mcp_result(resp_data)
+                        if isinstance(result, dict) and "comment_id" in result:
+                            state["comments_by_token"][0].append(result["comment_id"])
+                    except Exception:
+                        pass
+            print(f" done ({len(state['comments_by_token'][0])} threads)")
+
+    return state
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+
+def print_report(phases: list[PhaseResult]) -> None:
+    print("=" * 72)
+    print("LOAD TEST SUMMARY")
+    print("=" * 72)
+    for phase in phases:
+        print()
+        print(f"--- {phase.name} (concurrency={phase.concurrency_level}) ---")
+        phase.print_summary()
+
+    # Cross-phase comparison table
+    print()
+    print("--- Comparison ---")
+    print(f"{'Phase':<20s} {'Conc':>5s} {'Toks':>5s} {'Calls':>7s} {'Err%':>6s} "
+          f"{'TPS':>8s} {'p50(ms)':>8s} {'p95(ms)':>8s} {'p99(ms)':>8s}")
+    print("-" * 76)
+    for phase in phases:
+        s = phase.summary()
+        lat = s.get("latency_ms") or {}
+        p50 = f'{lat["p50"]:>8.1f}' if "p50" in lat else f"{'-':>8s}"
+        p95 = f'{lat["p95"]:>8.1f}' if "p95" in lat else f"{'-':>8s}"
+        p99 = f'{lat["p99"]:>8.1f}' if "p99" in lat else f"{'-':>8s}"
+        print(f"{phase.name:<20s} {phase.concurrency_level:>5d} "
+              f"{s['tokens_used']:>5d} "
+              f"{s['total_calls']:>7d} {s['error_rate_pct']:>5.1f}% "
+              f"{s['throughput_tps']:>8.2f} "
+              f"{p50} {p95} {p99}")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _parse_tool_weights(raw: list[str] | None) -> dict[str, float] | None:
+    if not raw:
+        return None
+    weights: dict[str, float] = {}
+    for item in raw:
+        parts = item.split("=", 1)
+        if len(parts) != 2:
+            print(f"warning: ignoring weight spec {item!r} (expected tool=weight)")
+            continue
+        tool, weight_str = parts
+        if tool not in DEFAULT_WEIGHTS:
+            print(f"warning: ignoring unknown tool {tool!r}")
+            continue
+        try:
+            weights[tool] = float(weight_str)
+        except ValueError:
+            print(f"warning: ignoring invalid weight {weight_str!r} for {tool}")
+    return weights if weights else None
+
+
+def _read_tokens(token: str | None, token_file: str | None) -> list[str]:
+    if token_file:
+        with open(token_file) as f:
+            tokens = [line.strip() for line in f if line.strip()]
+        if not tokens:
+            print("error: --token-file is empty", file=sys.stderr)
+            sys.exit(1)
+        return tokens
+    if token:
+        return [token]
+    print("error: either --token or --token-file is required", file=sys.stderr)
+    sys.exit(1)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Load test a RenderDesk MCP server.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    p.add_argument("--url", default="http://localhost:8000/mcp",
+                    help="MCP server URL (default: http://localhost:8000/mcp)")
+    p.add_argument("--token",
+                    help="Bearer token for MCP auth (single token mode)")
+    p.add_argument("--token-file",
+                    help="File with one Bearer token per line (per-agent token mode)")
+    p.add_argument("--concurrency", type=int, default=10,
+                    help="Number of concurrent agents (default: 10)")
+    p.add_argument("--max-concurrency", type=int, default=50,
+                    help="Maximum concurrency for ramp/stress (default: 50)")
+    p.add_argument("--duration", type=float, default=60,
+                    help="Test duration in seconds (default: 60)")
+    p.add_argument("--stress-duration", type=float, default=120,
+                    help="Stress phase duration in seconds (default: 120)")
+    p.add_argument("--soak-duration", type=float, default=1800,
+                    help="Soak phase duration in seconds (default: 1800)")
+    p.add_argument("--seed", type=int, default=0,
+                    help="Number of seed artifacts to create before testing (default: 0)")
+    p.add_argument("--other-email",
+                    help="Email of another user for share_artifact testing")
+    p.add_argument("--timeout", type=float, default=30.0,
+                    help="HTTP request timeout in seconds (default: 30)")
+    p.add_argument("--tool-weights", nargs="*", metavar="TOOL=WEIGHT",
+                    help="Tool weights (e.g. publish_artifact=10 get_artifact=40)")
+    p.add_argument("--phase", choices=["baseline", "ramp", "stress", "soak", "all"],
+                    default="all",
+                    help="Test phase to run (default: all)")
+    p.add_argument("--json", metavar="FILE",
+                    help="Write machine-readable summary as JSON to FILE")
+    return p
+
+
+def _normalize_url(raw: str) -> str:
+    if not raw.endswith("/mcp"):
+        return raw.rstrip("/") + "/mcp"
+    return raw
+
+
+async def main() -> None:
+    args = build_parser().parse_args()
+    args.url = _normalize_url(args.url)
+    tokens = _read_tokens(args.token, args.token_file)
+
+    custom_weights = _parse_tool_weights(args.tool_weights)
+    weights: dict[str, float] = custom_weights if custom_weights else dict(DEFAULT_WEIGHTS)
+
+    print(f"Target: {args.url}")
+    print(f"Phase: {args.phase}")
+    print(f"Tokens: {len(tokens)} unique  |  "
+          f"Concurrency: {args.concurrency}  |  "
+          f"Max: {args.max_concurrency}")
+    print(f"Tool mix: {weights}")
+    print()
+
+    state: dict[str, Any] = {
+        "artifacts_by_token": defaultdict(list),
+        "comments_by_token": defaultdict(list),
+        "seeded_artifact_ids": [],
+        "other_email": args.other_email,
+    }
+
+    if args.seed > 0:
+        state = await seed_server(args.url, tokens[0], args.seed, args.timeout, args.other_email)
+        print()
+
+    phases: list[PhaseResult] = []
+
+    match args.phase:
+        case "baseline":
+            phases.append(await run_phase(
+                "baseline", args.url, tokens, 1, args.duration, weights, state, args.timeout,
+            ))
+        case "ramp":
+            phases.extend(await run_ramp_phase(
+                args.url, tokens, args.max_concurrency, args.duration, weights, state, args.timeout,
+            ))
+        case "stress":
+            phases.append(await run_phase(
+                "stress", args.url, tokens, args.concurrency, args.duration, weights, state, args.timeout,
+            ))
+        case "soak":
+            phases.append(await run_phase(
+                "soak", args.url, tokens, args.concurrency, args.duration, weights, state, args.timeout,
+            ))
+        case "all":
+            phases.extend(await run_all_phases(
+                args.url, tokens, args.max_concurrency,
+                args.stress_duration, args.soak_duration,
+                weights, state, args.timeout,
+            ))
+
+    print()
+    print_report(phases)
+
+    if args.json:
+        data = {
+            "target": args.url,
+            "phase": args.phase,
+            "tokens_available": len(tokens),
+            "tool_mix": weights,
+            "phases": [{"name": p.name, "concurrency": p.concurrency_level} | p.summary() for p in phases],
+        }
+        with open(args.json, "w") as f:
+            json.dump(data, f, indent=2)
+        print(f"\nJSON summary written to {args.json}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

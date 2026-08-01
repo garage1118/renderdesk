@@ -191,6 +191,30 @@ if no account exists with that email. Sharing gives the recipient's
 dashboard access to the artifact. It does not give their own MCP
 connection any new access.
 
+## Prompts
+
+renderdesk also exposes an MCP prompt, a piece of guidance your client
+can insert into the conversation on request. This is separate from the
+tools above and works only in clients that support the MCP prompts
+capability.
+
+### publish_artifact
+
+Fills in a message that picks the right artifact format for a piece of
+content and calls out the CSP rule for `html` artifacts, then leaves
+your assistant to call the `publish_artifact` tool itself.
+
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `content` | string | yes | The content you want published. |
+| `title` | string | no | A display title. Left blank, the assistant infers one. |
+
+How you invoke it depends on your client. In Claude Code and VS Code,
+type `/mcp__renderdesk__publish_artifact` (Claude Code) or
+`/mcp.renderdesk.publish_artifact` (VS Code) and fill in the arguments.
+Check your client's own docs if it isn't listed here — not every MCP
+client implements the prompts capability yet.
+
 ## What these tools cannot do
 
 renderdesk has no MCP tool to delete an artifact, reassign it to
