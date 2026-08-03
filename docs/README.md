@@ -15,8 +15,14 @@ and share these artifacts.
   use its features, from comments to version history.
 - [MCP tool reference](mcp-tools.md): every MCP tool renderdesk exposes,
   with parameters, return values, and error codes.
+- [CLI reference](cli-reference.md): commands for administrators with
+  shell access to the deployed container — provisioning users, force
+  deleting artifacts, linking SSO identities, and changing the auth
+  scheme.
 
 ## Who these guides are for
 
-These guides assume you already have a renderdesk account. If you do
-not have one, ask your renderdesk administrator to create one for you.
+The first three guides assume you already have a renderdesk account. If
+you do not have one, ask your renderdesk administrator to create one for
+you. The CLI reference is written for administrators instead — it
+assumes shell access to the deployed container, not a dashboard account.

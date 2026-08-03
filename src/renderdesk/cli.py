@@ -11,7 +11,7 @@ from renderdesk import tools
 from renderdesk.auth_scheme import AUTH_SCHEMES
 from renderdesk.auth_scheme import set_auth_scheme as _set_auth_scheme_persisted
 from renderdesk.db import session_scope
-from renderdesk.models import Artifact, Connection, User, utcnow
+from renderdesk.models import Artifact, Connection, OidcIdentity, User, utcnow
 from renderdesk.oauth_provider import oauth_provider
 from renderdesk.tokens import create_personal_token
 
@@ -214,6 +214,92 @@ def delete_token_cmd(connection_id: str, label: str, email: str) -> None:
     create-user/create-token/delete-artifact."""
     asyncio.run(_delete_token(connection_id, label, email))
     click.echo("Deleted.")
+
+
+async def _link_oidc_identity(email: str, issuer: str, subject: str) -> None:
+    async with session_scope() as session:
+        user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
+        if user is None:
+            raise click.ClickException(f"no user with email {email!r}")
+
+        existing = (
+            await session.execute(
+                select(OidcIdentity).where(OidcIdentity.issuer == issuer, OidcIdentity.subject == subject)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.user_id == user.id:
+                raise click.ClickException("this identity is already linked to that user")
+            raise click.ClickException("this issuer/subject is already linked to a different user")
+
+        session.add(
+            OidcIdentity(id=str(uuid.uuid4()), user_id=user.id, issuer=issuer, subject=subject, created_at=utcnow())
+        )
+        await session.commit()
+
+
+@main.command("link-oidc-identity")
+@click.option("--email", required=True, help="Email of the existing renderdesk user to link")
+@click.option("--issuer", required=True, help="Exact 'issuer' value from the IdP's /.well-known/openid-configuration")
+@click.option("--subject", required=True, help="The IdP's 'sub' claim for this person")
+def link_oidc_identity_cmd(email: str, issuer: str, subject: str) -> None:
+    """Link an external OIDC identity to an existing renderdesk user, so
+    they can log in via SSO instead of (or alongside) a password. Needed
+    because a first-time OIDC login is deliberately never auto-linked to
+    an existing account by matching email alone, to close an
+    account-takeover path — see dashboard.oidc_callback and
+    DESIGN_NOTES.md. Get --issuer from the IdP's discovery document (must
+    match exactly, including trailing slash) and --subject from however
+    the IdP is configured to populate the sub claim (e.g. Authentik's
+    provider-level 'Subject mode' setting). Never exposed as an MCP tool
+    or a dashboard action — shell access to the deployed container is the
+    trust boundary here, same as create-user/create-token."""
+    asyncio.run(_link_oidc_identity(email, issuer, subject))
+    click.echo(f"Linked {email} to issuer {issuer!r}, subject {subject!r}.")
+
+
+async def _unlink_oidc_identity(issuer: str, subject: str, email: str) -> None:
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                select(OidcIdentity, User.email)
+                .join(User, User.id == OidcIdentity.user_id)
+                .where(OidcIdentity.issuer == issuer, OidcIdentity.subject == subject)
+            )
+        ).first()
+        if row is None:
+            raise click.ClickException(f"no identity linked for issuer {issuer!r}, subject {subject!r}")
+        identity, owner_email = row
+
+        # A correctness check, not a confirmation prompt — same reasoning
+        # as delete-artifact/revoke-token: this command is expected to run
+        # non-interactively, and requiring the caller to already know the
+        # linked owner's email catches a wrong/copy-pasted issuer or
+        # subject before it unlinks someone else's identity.
+        if owner_email != email:
+            raise click.ClickException(
+                "email doesn't match this identity's linked user — not unlinking. If the caller doesn't "
+                "have the correct owner email, something upstream is wrong; don't guess."
+            )
+
+        await session.delete(identity)
+        await session.commit()
+
+
+@main.command("unlink-oidc-identity")
+@click.option("--issuer", required=True, help="Exact 'issuer' value the identity was linked with")
+@click.option("--subject", required=True, help="The IdP's 'sub' claim for the identity to unlink")
+@click.option("--email", required=True, help="Exact email of the renderdesk user this identity is linked to")
+def unlink_oidc_identity_cmd(issuer: str, subject: str, email: str) -> None:
+    """Remove a previously linked OIDC identity — to clean up a mistaken
+    link-oidc-identity call, or revoke SSO access for one IdP account
+    without touching a user's other logins or their password. --email
+    must exactly match the identity's currently linked user, or nothing
+    is unlinked. Never exposed as an MCP tool or a dashboard action —
+    shell access to the deployed container is the trust boundary here,
+    same as create-user/create-token/link-oidc-identity."""
+    asyncio.run(_unlink_oidc_identity(issuer, subject, email))
+    click.echo("Unlinked.")
 
 
 async def _set_auth_scheme(scheme: str) -> None:

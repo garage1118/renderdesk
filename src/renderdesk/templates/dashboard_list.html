@@ -8,6 +8,8 @@
 <script src="/static/theme.js"></script>
 {% set active_nav = "artifacts" %}
 {% include "_topbar.html" %}
+{% set format_icons = {"html": "</>", "markdown": "#", "code": ">_"} %}
+{% macro format_icon(fmt) %}<span class="format-icon fmt-{{ fmt }}" title="{{ fmt }}">{% if fmt == "csv" %}<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="1.5"/><line x1="1.5" y1="6.5" x2="14.5" y2="6.5"/><line x1="8" y1="6.5" x2="8" y2="14.5"/></svg>{% else %}{{ format_icons.get(fmt, "?") }}{% endif %}</span>{% endmacro %}
 <main class="page">
   <div class="page-header">
     <h1 class="page-title">Your artifacts</h1>
@@ -18,7 +20,7 @@
     <tr><th>Title</th><th>Format</th><th>Connection</th><th>Updated</th><th></th></tr>
     {% for row in artifacts %}
     <tr>
-      <td><strong>{{ row.artifact.title or "Untitled" }}</strong></td>
+      <td><div class="title-cell">{{ format_icon(row.artifact.format.value) }}<strong>{{ row.artifact.title or "Untitled" }}</strong></div></td>
       <td>{{ row.artifact.format.value }}{{ " (" + row.artifact.language + ")" if row.artifact.language else "" }}</td>
       <td>{{ row.connection_label or "—" }}</td>
       <td>{{ row.artifact.updated_at }}</td>
@@ -47,7 +49,7 @@
     <tr><th>Title</th><th>Format</th><th>Shared by</th><th>Shared</th><th></th></tr>
     {% for row in shared_with_you %}
     <tr>
-      <td>{{ row.title or "Untitled" }}</td>
+      <td><div class="title-cell">{{ format_icon(row.format) }}{{ row.title or "Untitled" }}</div></td>
       <td>{{ row.format }}{{ " (" + row.language + ")" if row.language else "" }}</td>
       <td>{{ row.shared_by_connection_label or "—" }}</td>
       <td>{{ row.shared_at }}</td>
