@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -412,3 +414,60 @@ async def test_html_artifact_without_mermaid_class_is_unaffected(client):
     assert "frame-src 'none'" in csp
     assert "object-src 'none'" in csp
     assert "frame-ancestors 'self'" in csp
+
+
+async def test_react_artifact_view_page_embeds_sandboxed_iframe(client):
+    connection_id = await make_connection()
+    jsx = "export default function App() { return <h1>Hi</h1>; }\n"
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react", "My Component")
+
+    resp = await client.get(f"/a/{published['artifact_id']}")
+    assert resp.status_code == 200
+    assert "iframe" in resp.text
+    assert f"/a/{published['artifact_id']}/raw" in resp.text
+    # Same iframe-wrapper CSP treatment as html format — see
+    # test_html_artifact_served_byte_for_byte_with_csp.
+    assert "frame-src 'self'" in resp.headers["content-security-policy"]
+
+
+async def test_react_artifact_raw_route_wraps_source_for_babel(client):
+    connection_id = await make_connection()
+    jsx = "export default function App() { return <h1>Hi</h1>; }\n"
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert '<div id="root"></div>' in resp.text
+    assert "/static/vendor/react-18.3.1.production.min.js" in resp.text
+    assert "/static/vendor/react-dom-18.3.1.production.min.js" in resp.text
+    assert "/static/vendor/babel-standalone-7.26.9.min.js" in resp.text
+    assert "/static/react-init.js" in resp.text
+
+    embedded = resp.text.split('<script id="artifact-source" type="application/json">')[1].split("</script>")[0]
+    assert json.loads(embedded) == jsx
+
+    csp = resp.headers["content-security-policy"]
+    # script-src needs no 'unsafe-inline' (unlike html format) — every
+    # <script> tag on this page is one of ours, the artifact source is inert
+    # JSON text. style-src keeps 'unsafe-inline' (components may render a
+    # literal <style> tag), so this checks script-src specifically.
+    assert "script-src 'self' 'unsafe-eval'" in csp
+    assert "sandbox allow-scripts" in csp
+    assert "connect-src 'none'" in csp
+
+
+async def test_react_artifact_source_cannot_break_out_of_script_tag(client):
+    connection_id = await make_connection()
+    malicious = 'export default function App() { return <div>{"</script><script>alert(1)</script>"}</div>; }\n'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, malicious, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    embedded = resp.text.split('<script id="artifact-source" type="application/json">')[1].split("</script>")[0]
+    assert json.loads(embedded) == malicious
+    assert "<script>alert(1)</script>" not in resp.text  # would indicate a broken-out tag
+
+

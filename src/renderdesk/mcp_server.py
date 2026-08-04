@@ -27,15 +27,18 @@ mcp = FastMCP("renderdesk", streamable_http_path="/", transport_security=_transp
 @mcp.tool()
 async def publish_artifact(
     content: str,
-    format: Literal["html", "markdown", "code", "csv"],
+    format: Literal["html", "markdown", "code", "csv", "react"],
     title: str | None = None,
     language: str | None = None,
 ) -> dict:
-    """Publish a new self-contained HTML, Markdown, Code, or CSV artifact and get back a
+    """Publish a new self-contained HTML, Markdown, Code, CSV, or React artifact and get back a
     shareable URL. For format="code", content is rendered read-only with syntax highlighting
     (not executed) — pass language (e.g. "python", "rust") to drive highlighting; an omitted or
     unrecognized language falls back to plain text. For format="csv", content is rendered as an
-    HTML table (first row treated as a header) with drag-resizable columns."""
+    HTML table (first row treated as a header) with drag-resizable columns. For format="react",
+    content is a JSX/TSX module whose default export is mounted as the root component — only
+    "react" and "react-dom" are available to import, no other packages (there's no bundler, so an
+    import of anything else fails at render time with a readable error instead of a blank page)."""
     connection_id = get_current_connection_id()
     async with session_scope() as session:
         return await tools.publish_artifact(session, connection_id, content, format, title, language)
@@ -137,7 +140,12 @@ def publish_artifact_prompt(content: str, title: str = "") -> str:
         "embedded as a data URI, or it silently fails to load with no visible error.\n"
         "- Use `code` for read-only syntax-highlighted source; pass `language` (e.g. "
         '"python") — an unrecognized or omitted language falls back to plain text.\n'
-        "- Use `csv` for tabular data; the first row is treated as the header.\n\n"
+        "- Use `csv` for tabular data; the first row is treated as the header.\n"
+        "- Use `react` for an interactive component: content is a JSX/TSX module with a "
+        "default export, transpiled and mounted client-side. Only `react`/`react-dom` are "
+        "importable — no bundler, so any other import (an icon set, a chart library, "
+        "Tailwind, ...) fails at render time. Style with inline `style` props or a literal "
+        "`<style>` tag in the JSX, not a Tailwind className.\n\n"
         f"Title: {title or '(infer a short, descriptive title from the content)'}\n\n"
         "Content to publish:\n---\n"
         f"{content}\n"

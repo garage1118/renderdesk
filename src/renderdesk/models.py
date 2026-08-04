@@ -19,6 +19,7 @@ class ArtifactFormat(enum.StrEnum):
     markdown = "markdown"
     code = "code"
     csv = "csv"
+    react = "react"
 
 
 class User(Base):

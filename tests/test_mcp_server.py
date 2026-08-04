@@ -16,6 +16,7 @@ async def test_publish_artifact_prompt_renders_format_guidance():
     assert "markdown" in text
     assert "csv" in text
     assert "CSP" in text
+    assert "react" in text
 
 
 async def test_publish_artifact_prompt_defaults_title_to_inference_hint():

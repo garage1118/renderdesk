@@ -1,6 +1,7 @@
 import csv
 import html as html_escape
 import io
+import json
 import re
 from collections.abc import Sequence
 
@@ -52,6 +53,24 @@ _MERMAID_VERSION = "11.16.0"
 _MERMAID_ASSETS = (
     f'<script src="/static/vendor/mermaid-{_MERMAID_VERSION}.min.js"></script>'
     '<script src="/static/mermaid-init.js"></script>'
+)
+
+# Unlike _HTML_CSP, this needs no 'unsafe-inline' for script-src: every
+# script tag react-init.js's wrapper page emits is an external /static file
+# we control, never inline artifact-authored script (the JSX source itself
+# sits inert in a type="application/json" block, only ever reaching Babel
+# via JSON.parse). 'unsafe-eval' is still required — react-init.js runs
+# Babel's transpiled output through `new Function(...)`, since there's no
+# server-side bundling step to produce a plain <script> in the first place.
+_REACT_CSP = _HTML_CSP.replace("script-src 'unsafe-inline' 'unsafe-eval';", "script-src 'self' 'unsafe-eval';")
+
+_REACT_VERSION = "18.3.1"
+_BABEL_STANDALONE_VERSION = "7.26.9"
+_REACT_ASSETS = (
+    f'<script src="/static/vendor/react-{_REACT_VERSION}.production.min.js"></script>'
+    f'<script src="/static/vendor/react-dom-{_REACT_VERSION}.production.min.js"></script>'
+    f'<script src="/static/vendor/babel-standalone-{_BABEL_STANDALONE_VERSION}.min.js"></script>'
+    '<script src="/static/react-init.js"></script>'
 )
 
 _KATEX_ASSETS = (
@@ -263,6 +282,29 @@ def _inject_mermaid_if_present(content: str) -> tuple[str, bool]:
     return content + _MERMAID_ASSETS, True
 
 
+def _build_react_raw_html(artifact: Artifact) -> str:
+    """Wrap a React artifact's JSX/TSX source (just the module body — no
+    bundler, so no build step turns it into a plain <script>) for
+    react-init.js to transpile and mount client-side. The source is embedded
+    as JSON text, not an inline <script type="text/babel">, specifically so
+    it never needs 'unsafe-inline' in the CSP: a type="application/json"
+    block is inert data the HTML parser doesn't execute, reaching Babel only
+    via JSON.parse. The HTML tokenizer still scans script *content* for a
+    literal "</script" regardless of the declared type, though, so any such
+    sequence in the source has to be escaped or it would truncate the tag
+    early — the json.dumps().replace() below is the standard fix for
+    embedding arbitrary text in an inline script (same technique frameworks
+    use for SSR hydration data)."""
+    title = html_escape.escape(artifact.title or "Untitled")
+    source_json = json.dumps(artifact.content).replace("</", "<\\/")
+    return (
+        f"<!doctype html><title>{title}</title><style>html,body{{margin:0}}</style>"
+        '<div id="root"></div>'
+        f'<script id="artifact-source" type="application/json">{source_json}</script>'
+        f"{_REACT_ASSETS}"
+    )
+
+
 async def _load_artifact(artifact_id: str) -> Artifact:
     async with session_scope() as session:
         result = await session.execute(select(Artifact).where(Artifact.id == artifact_id))
@@ -304,10 +346,9 @@ async def view_artifact(artifact_id: str) -> Response:
         code_html, style = render_highlighted_source(artifact.content, artifact.language)
 
         title = html_escape.escape(artifact.title or "Untitled")
-        safe_id = html_escape.escape(artifact_id)
         body = (
             f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{style}{_THEME_SCRIPT}"
-            f'<body><p><a href="/a/{safe_id}/raw">View raw</a></p>{code_html}</body>'
+            f"<body>{code_html}</body>"
         )
         return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
 
@@ -316,10 +357,9 @@ async def view_artifact(artifact_id: str) -> Response:
         table_html = _render_csv_table(artifact.content)
 
         title = html_escape.escape(artifact.title or "Untitled")
-        safe_id = html_escape.escape(artifact_id)
         body = (
             f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{_CSV_CSS}{_THEME_SCRIPT}"
-            f'<body><p><a href="/a/{safe_id}/raw">View raw</a></p>{table_html}{_CSV_ASSETS}</body>'
+            f"<body>{table_html}{_CSV_ASSETS}</body>"
         )
         return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
 
@@ -360,6 +400,10 @@ async def view_artifact_raw(artifact_id: str) -> Response:
             media_type="text/csv",
             headers={"X-Content-Type-Options": "nosniff"},
         )
+
+    if artifact.format == ArtifactFormat.react:
+        content = _build_react_raw_html(artifact)
+        return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": _REACT_CSP})
 
     if artifact.format != ArtifactFormat.html:
         raise HTTPException(status_code=404)

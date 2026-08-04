@@ -8,6 +8,7 @@
 <script src="/static/theme.js"></script>
 {% set active_nav = "artifacts" %}
 {% include "_topbar.html" %}
+{% macro icon_eye() %}<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/><circle cx="8" cy="8" r="2"/></svg>{% endmacro %}
 <main class="page">
   <p class="breadcrumb"><a href="/dashboard/a/{{ artifact.id }}">&larr; {{ artifact.title or "Untitled" }}</a></p>
   <div class="page-header">
@@ -34,7 +35,7 @@
       <td>{{ v.created_at }}</td>
       <td>
         <div class="row-actions">
-          <a href="/dashboard/a/{{ artifact.id }}/versions/{{ v.version }}">View</a>
+          <a href="/dashboard/a/{{ artifact.id }}/versions/{{ v.version }}" class="icon-btn" aria-label="View" title="View">{{ icon_eye() }}</a>
           {% if not v.is_current %}
           <form method="post" action="/dashboard/a/{{ artifact.id }}/versions/{{ v.version }}/delete"
                 onsubmit="return confirm('Delete version {{ v.version }} permanently?');">

@@ -11,7 +11,7 @@ setup, not design.
 ## What this is
 
 renderdesk is a self-hosted store for LLM-generated artifacts (self-contained
-HTML/Markdown/code/CSV documents), reachable over MCP so agents (Claude Code,
+HTML/Markdown/code/CSV/React documents), reachable over MCP so agents (Claude Code,
 Claude on the web, ChatGPT, or any MCP client) can publish/update/list them
 the way Claude's own `Artifact` tool does — except self-hosted. A web
 dashboard lets a human browse, comment on, and share what gets published.
@@ -99,10 +99,15 @@ otherwise) — never executes artifact-supplied script, gets the strictest
 CSP. `html` artifacts are served byte-for-byte into a sandboxed iframe with
 a CSP blocking network access (`connect-src 'none'`) — the enforced
 constraint on publishers is that an HTML artifact must be fully
-self-contained. Every asset (Mermaid, KaTeX, Pygments' CSS, fonts) is
-vendored under `static/`, same-origin — zero external network calls from
-any served page, a hard project-wide rule, not a preference (see the
-`DESIGN_NOTES.md` fonts/CDN incident for what happens when this slips).
+self-contained. `react` artifacts are JSX/TSX source run the same way, via
+a vendored React/ReactDOM/Babel-standalone runtime and a small CommonJS
+shim (`static/react-init.js`) that resolves only `react`/`react-dom` —
+there's no bundler, so any other import fails at render time rather than
+silently 404ing against a CDN. Every asset (Mermaid, KaTeX, Pygments' CSS,
+fonts, the React runtime) is vendored under `static/`, same-origin — zero
+external network calls from any served page, a hard project-wide rule, not
+a preference (see the `DESIGN_NOTES.md` fonts/CDN incident for what
+happens when this slips).
 CSP is loosened (`script-src 'self'`, same-origin only) only on the specific
 responses that actually need it (a diagram/CSV column-resize present),
 never globally.

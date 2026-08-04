@@ -7,7 +7,8 @@ COPY src ./src
 RUN uv sync --frozen --no-dev
 
 FROM python:3.12-slim
-RUN apt-get update && apt-get install --no-install-recommends -y gosu \
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 appuser
 WORKDIR /app

@@ -60,6 +60,31 @@ imposes. Every vendored asset the app itself needs (Mermaid, KaTeX,
 fonts) is bundled same-origin under `/static` — zero external network
 calls from any served page, a hard project-wide rule, not a preference.
 
+**React artifacts — scoped deliberately, not a full bundler.** Claude's own
+`Artifact` tool supports React components that `import` arbitrary npm
+packages (recharts, lucide-react, ...) resolved from a CDN at render time.
+Doing that here would mean either vendoring an open-ended set of
+third-party libraries (unbounded maintenance surface) or letting artifact
+script reach an external CDN — the exact thing the self-contained-HTML
+rule above exists to prevent, and the kind of slip the fonts/CDN incident
+below is a cautionary tale about. So renderdesk's `react` format is
+intentionally narrower: content is a JSX/TSX module source (no build
+step), transpiled in-browser by a vendored Babel standalone and mounted
+via vendored React/ReactDOM UMD builds — same sandboxed-iframe/CSP
+treatment as `html`. A small hand-written CommonJS shim
+(`static/react-init.js`) backs `require`/`import` for exactly `react` and
+`react-dom`; anything else throws a readable in-page error rather than
+silently failing like an unresolved CDN import would. Concretely this
+means no Tailwind, no icon/chart libraries, no `fetch` (`connect-src
+'none'` still applies) — components style themselves via inline `style`
+props or a literal `<style>` tag in the JSX. The wrapper page needs no
+`unsafe-inline` in its CSP at all (tighter than `html`'s), since every
+`<script>` it emits is one of ours; the JSX source itself is embedded as
+inert JSON text, reaching Babel only via `JSON.parse`, never parsed as
+markup. Broadening this to arbitrary npm imports is a real possible
+future direction, but a separate, bigger decision — see Limitations and
+roadmap.
+
 **MCP tool surface** is intentionally narrow:
 ```
 publish_artifact       content, format, title?, language?
@@ -366,3 +391,14 @@ independent locks and only genuine database-level write contention
 remains. Until Postgres/multi-worker support lands, using one token per
 real concurrent caller (rather than sharing a single MCP token across many
 agents) is a free mitigation for this specific bottleneck.
+
+**Arbitrary npm imports for React artifacts.** A third, independent
+direction, unrelated to auth or process topology. Today's `react` format
+(see Design principles above) only has `react`/`react-dom` in scope — no
+charting/icon/animation libraries, matching what real Claude-generated
+React artifacts commonly import. Supporting that for real needs one of:
+vendoring a curated allowlist of popular packages (bounded but ongoing
+maintenance, and a new "which libraries" decision), or relaxing CSP to
+permit a specific CDN origin (reopens exactly the self-contained-artifact
+guarantee the rest of this doc treats as a hard rule) — worth deciding
+deliberately if this format sees real use, not backed into incrementally.

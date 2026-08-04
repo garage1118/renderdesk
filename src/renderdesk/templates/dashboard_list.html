@@ -6,38 +6,46 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
+<script src="/static/sortable-table.js"></script>
 {% set active_nav = "artifacts" %}
 {% include "_topbar.html" %}
-{% set format_icons = {"html": "</>", "markdown": "#", "code": ">_"} %}
+{% set format_icons = {"html": "</>", "markdown": "#", "code": ">_", "react": "⚛"} %}
 {% macro format_icon(fmt) %}<span class="format-icon fmt-{{ fmt }}" title="{{ fmt }}">{% if fmt == "csv" %}<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="1.5"/><line x1="1.5" y1="6.5" x2="14.5" y2="6.5"/><line x1="8" y1="6.5" x2="8" y2="14.5"/></svg>{% else %}{{ format_icons.get(fmt, "?") }}{% endif %}</span>{% endmacro %}
+{% macro icon_search() %}<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><line x1="10.5" y1="10.5" x2="14" y2="14"/></svg>{% endmacro %}
+{% macro icon_eye() %}<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/><circle cx="8" cy="8" r="2"/></svg>{% endmacro %}
+{% macro icon_trash() %}<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M6 4V2.5A1 1 0 0 1 7 1.5h2A1 1 0 0 1 10 2.5V4M4.5 4l.6 9a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-9"/><line x1="6.5" y1="7" x2="6.5" y2="11.5"/><line x1="9.5" y1="7" x2="9.5" y2="11.5"/></svg>{% endmacro %}
 <main class="page">
   <div class="page-header">
     <h1 class="page-title">Your artifacts</h1>
   </div>
 
   {% if artifacts %}
-  <table class="ds-table">
+  <table class="ds-table sortable-table" data-default-sort-index="3" data-default-sort-dir="desc">
+    <thead>
     <tr><th>Title</th><th>Format</th><th>Connection</th><th>Updated</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for row in artifacts %}
     <tr>
-      <td><div class="title-cell">{{ format_icon(row.artifact.format.value) }}<strong>{{ row.artifact.title or "Untitled" }}</strong></div></td>
+      <td data-sort-value="{{ (row.artifact.title or 'Untitled')|lower }}"><div class="title-cell">{{ format_icon(row.artifact.format.value) }}<strong>{{ row.artifact.title or "Untitled" }}</strong></div></td>
       <td>{{ row.artifact.format.value }}{{ " (" + row.artifact.language + ")" if row.artifact.language else "" }}</td>
       <td>{{ row.connection_label or "—" }}</td>
       <td>{{ row.artifact.updated_at }}</td>
       <td>
         <div class="row-actions">
-          <a href="/dashboard/a/{{ row.artifact.id }}">Open</a>
-          <a href="/a/{{ row.artifact.id }}" target="_blank">View</a>
+          <a href="/dashboard/a/{{ row.artifact.id }}" class="icon-btn" aria-label="Open" title="Open">{{ icon_search() }}</a>
+          <a href="/a/{{ row.artifact.id }}" target="_blank" class="icon-btn" aria-label="View" title="View">{{ icon_eye() }}</a>
           <form method="post" action="/dashboard/a/{{ row.artifact.id }}/delete"
                 data-confirm-title="{{ row.artifact.title or 'this artifact' }}"
                 onsubmit="return confirm('Delete ' + this.dataset.confirmTitle + ' permanently? This also removes its comments and shares.');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-            <button type="submit" class="btn-danger-text">Delete</button>
+            <button type="submit" class="icon-btn icon-btn-danger" aria-label="Delete" title="Delete">{{ icon_trash() }}</button>
           </form>
         </div>
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}
   <div class="empty-state">No artifacts published yet.</div>
@@ -45,22 +53,26 @@
 
   <h2 class="section-title" style="margin-top:2.5rem">Shared with you</h2>
   {% if shared_with_you %}
-  <table class="ds-table">
+  <table class="ds-table sortable-table" data-default-sort-index="3" data-default-sort-dir="desc">
+    <thead>
     <tr><th>Title</th><th>Format</th><th>Shared by</th><th>Shared</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for row in shared_with_you %}
     <tr>
-      <td><div class="title-cell">{{ format_icon(row.format) }}{{ row.title or "Untitled" }}</div></td>
+      <td data-sort-value="{{ (row.title or 'Untitled')|lower }}"><div class="title-cell">{{ format_icon(row.format) }}{{ row.title or "Untitled" }}</div></td>
       <td>{{ row.format }}{{ " (" + row.language + ")" if row.language else "" }}</td>
       <td>{{ row.shared_by_connection_label or "—" }}</td>
       <td>{{ row.shared_at }}</td>
       <td>
         <div class="row-actions">
-          <a href="/dashboard/a/{{ row.artifact_id }}">Open</a>
-          <a href="/a/{{ row.artifact_id }}" target="_blank">View</a>
+          <a href="/dashboard/a/{{ row.artifact_id }}" class="icon-btn" aria-label="Open" title="Open">{{ icon_search() }}</a>
+          <a href="/a/{{ row.artifact_id }}" target="_blank" class="icon-btn" aria-label="View" title="View">{{ icon_eye() }}</a>
         </div>
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}
   <div class="empty-state">Nothing shared with you yet.</div>

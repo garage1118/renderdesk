@@ -154,7 +154,7 @@ async def test_publish_csv_artifact_round_trips():
 async def test_publish_rejects_invalid_format():
     connection_id = await make_connection()
     async with session_scope() as session:
-        with pytest.raises(ValueError, match="must be 'html', 'markdown', 'code', or 'csv'"):
+        with pytest.raises(ValueError, match="must be 'html', 'markdown', 'code', 'csv', or 'react'"):
             await tools.publish_artifact(session, connection_id, "x", "yaml")
 
 
