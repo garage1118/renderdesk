@@ -8,6 +8,10 @@ publish your first artifact.
 You need a renderdesk account. If you do not have one, ask your
 renderdesk administrator to create one for you.
 
+The examples below use `https://renderdesk.example.com` as a
+placeholder — replace it with your own instance's URL wherever it
+appears.
+
 renderdesk supports two ways to connect a client:
 
 - **A personal token.** Use this for command-line agents such as Claude
@@ -42,7 +46,7 @@ create a new one and update your client's configuration.
 Run this command, with your token in place of `YOUR_TOKEN`:
 
 ```
-claude mcp add --transport http renderdesk https://renderdesk.pythonpowered.net/mcp --header "Authorization: Bearer YOUR_TOKEN"
+claude mcp add --transport http renderdesk https://renderdesk.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ### OpenCode
@@ -50,13 +54,13 @@ claude mcp add --transport http renderdesk https://renderdesk.pythonpowered.net/
 For a personal token, run:
 
 ```
-opencode mcp add renderdesk --url https://renderdesk.pythonpowered.net/mcp --header "Authorization=Bearer YOUR_TOKEN"
+opencode mcp add renderdesk --url https://renderdesk.example.com/mcp --header "Authorization=Bearer YOUR_TOKEN"
 ```
 
 For OAuth instead, add the server without a token, then authenticate:
 
 ```
-opencode mcp add renderdesk --url https://renderdesk.pythonpowered.net/mcp
+opencode mcp add renderdesk --url https://renderdesk.example.com/mcp
 opencode mcp auth renderdesk
 ```
 
@@ -65,7 +69,7 @@ The second command opens your browser to a login and approval page.
 ### Claude on the web, ChatGPT, and other browser-based clients
 
 1. In your client, add a new connector or custom MCP server.
-2. Enter this URL: `https://renderdesk.pythonpowered.net/mcp`.
+2. Enter this URL: `https://renderdesk.example.com/mcp`.
 3. Follow the prompts to log in to renderdesk and approve the
    connection.
 
@@ -79,7 +83,7 @@ Ask your agent to publish an artifact. For example:
 > Publish an HTML page that says "Hello, renderdesk" as an artifact.
 
 The agent calls the `publish_artifact` tool and returns a URL such as
-`https://renderdesk.pythonpowered.net/a/<id>`. Open the URL to view the
+`https://renderdesk.example.com/a/<id>`. Open the URL to view the
 artifact.
 
 ## What counts as one connection

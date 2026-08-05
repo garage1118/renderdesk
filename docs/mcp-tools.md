@@ -15,6 +15,7 @@ Pass one of these values as `format` to `publish_artifact` or
 | `markdown` | Rendered to sanitized HTML. Supports fenced code blocks with syntax highlighting, Mermaid diagrams, and `$...$` or `$$...$$` math. |
 | `code` | Rendered read-only with syntax highlighting. Pass a `language` value, such as `python` or `rust`, to select a highlighter. The content never runs. |
 | `csv` | Rendered as an HTML table. renderdesk treats the first row as a header and adds drag-to-resize column handles. |
+| `react` | A React component, written as JSX/TSX source, run client-side inside a sandboxed frame via a vendored React/Babel runtime. No bundler: only `import`s of `react`/`react-dom` resolve — anything else fails at render time. |
 
 An artifact keeps its format until you change it with `update_artifact`.
 
@@ -27,7 +28,7 @@ Publishes a new artifact and returns a link to it.
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `content` | string | yes | The artifact body, as plain text. |
-| `format` | string | yes | One of `html`, `markdown`, `code`, `csv`. |
+| `format` | string | yes | One of `html`, `markdown`, `code`, `csv`, `react`. |
 | `title` | string | no | A display title. Defaults to "Untitled". |
 | `language` | string | no | A syntax-highlighting language, used only when `format` is `code`. |
 

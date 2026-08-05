@@ -17,16 +17,16 @@ create one for you.
 
 The **Artifacts** page lists every artifact you own, across every
 connection. Each row shows the title, format, owning connection, and
-last update time. Each row has two links:
+last update time, and can be sorted by clicking any column header.
+Each row has three icon buttons:
 
-- **Open** takes you to the artifact's dashboard page, with comments
-  and sharing controls.
-- **View** opens the artifact itself in a new tab, the same page an
+- A magnifying glass **opens** the artifact's dashboard page, with
+  comments and sharing controls.
+- An eye **views** the artifact itself in a new tab, the same page an
   agent gets back from `publish_artifact`.
-
-Select **Delete** to remove an artifact permanently. This also removes
-its comments, its shares, and its version history. renderdesk does not
-ask a second time, so check the title before you confirm.
+- A trash can **deletes** the artifact permanently. This also removes
+  its comments, its shares, and its version history. renderdesk does
+  not ask a second time, so check the title before you confirm.
 
 ## The artifact page
 
@@ -76,8 +76,8 @@ an artifact.
 Every update to an artifact creates a new version. Open an artifact and
 select **Version history** to see every past version.
 
-- Select a version number to view it as read-only text. renderdesk
-  never re-runs an old HTML version.
+- Select the eye icon next to a version to view it as read-only text.
+  renderdesk never re-runs an old HTML version.
 - Select **Delete** next to a version to remove that one snapshot. You
   cannot delete the current version.
 - Select **Prune old versions** to delete every version except the
@@ -87,7 +87,8 @@ select **Version history** to see every past version.
 ## Connections
 
 The **Connections** page lists every client connected to your account,
-whether it connected with a personal token or through OAuth.
+whether it connected with a personal token or through OAuth. Click any
+column header to sort the list.
 
 ### Create a personal token
 
@@ -112,8 +113,8 @@ leave the connection in its revoked state.
 ## Shared with you
 
 The bottom of the **Artifacts** page lists artifacts other users have
-shared with you. Select **Open** to comment on one, or **View** to see
-it on its own.
+shared with you. Select the magnifying glass to comment on one, or the
+eye icon to see it on its own.
 
 ## Light and dark theme
 

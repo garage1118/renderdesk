@@ -1,10 +1,10 @@
 # renderdesk documentation
 
 renderdesk is a self-hosted store for artifacts that an AI agent
-generates. An agent publishes an HTML, Markdown, code, or CSV document
-through the Model Context Protocol (MCP). renderdesk stores it and gives
-back a shareable link. A web dashboard lets a human browse, comment on,
-and share these artifacts.
+generates. An agent publishes an HTML, Markdown, code, CSV, or React
+document through the Model Context Protocol (MCP). renderdesk stores
+it and gives back a shareable link. A web dashboard lets a human
+browse, comment on, and share these artifacts.
 
 ## Guides
 

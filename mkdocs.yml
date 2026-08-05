@@ -1,0 +1,47 @@
+site_name: renderdesk
+site_description: Self-hosted MCP artifact store — publish and browse AI-generated artifacts.
+repo_url: https://github.com/garage1118/renderdesk
+repo_name: garage1118/renderdesk
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.ico
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Dashboard guide: dashboard-guide.md
+  - MCP tool reference: mcp-tools.md
+  - CLI reference: cli-reference.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - toc:
+      permalink: true
