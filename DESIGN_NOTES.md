@@ -451,41 +451,140 @@ it's trivially inside every quota this app already has.
 No change to `publish_artifact`'s argument shape fixes this, because *any*
 MCP tool argument is still something the calling model has to produce as
 text — the constraint is in the protocol's request path, not in what
-content we accept once it arrives. The actual fix is a side channel that
-never asks the model to reproduce the bytes: a plain authenticated HTTP
-upload endpoint the client can hit directly (even a Bash-capable agent can
-`curl -F` a local file), returning a small reference the model *can*
-cheaply generate, which then goes into `content` as an ordinary `<img
-src>`/`![]()` URL.
+content we accept once it arrives. Three ways to route around that
+surfaced so far, not yet chosen between:
 
-Concretely:
-- A new `Asset` table (id, connection_id, content_type, byte_size,
-  `LargeBinary` content, created_at) — mirrors `Artifact`'s
-  content-in-SQLite approach rather than standing up separate object
-  storage, consistent with the single-file/no-external-deps posture
-  everywhere else in this app.
-- `POST /assets` (multipart or raw body), authenticated the same way
-  `/mcp` is — same `Connection` row, so uploads count against that
-  connection's existing quota rather than a parallel one. Needs its own
-  per-request size cap and a decision on whether assets share
-  `max_total_bytes_per_connection` or get a dedicated ceiling.
-- `GET /assets/{id}` to serve them back. Access control is the open
-  question here: require the same bearer token as everything else (which
-  breaks a plain `<img>` tag in a viewer's browser), or follow the
-  referencing artifact's own visibility (public once shared, like the
-  artifact page itself)? Probably the latter, but it means asset access
-  has to be resolved through whatever artifact(s) reference it, not the
-  uploading connection alone.
-- The `html` format's CSP currently blocks *all* outbound requests,
-  including same-origin ones — that blanket rule needs a narrow carve-out
-  for `/assets/*` specifically, not a general network allowance, or this
-  reopens the exfiltration risk the sandbox exists to prevent.
-- Orphaned assets (uploaded, never referenced, or referenced by an
-  artifact that's since been deleted) need the same kind of cleanup story
-  already flagged for audit-log retention — worth deciding the GC policy
-  up front rather than letting it grow unbounded.
+**A. Separate `Asset` entity + reference URL.** A new `Asset` table (id,
+connection_id, content_type, byte_size, `LargeBinary` content,
+created_at) — mirrors `Artifact`'s content-in-SQLite approach rather than
+standing up separate object storage. `POST /assets` (multipart or raw
+body), authenticated the same way `/mcp` is, returns a small reference
+the model *can* cheaply generate, which goes into `content` as an
+ordinary `<img src>`/`![]()` URL. Needs: its own per-request size cap and
+a decision on whether assets share `max_total_bytes_per_connection` or
+get a dedicated ceiling; `GET /assets/{id}` access control (same bearer
+token, which breaks a plain `<img>` tag in a viewer's browser, vs.
+following the referencing artifact's own visibility once shared —
+probably the latter, but that means resolving access through whatever
+artifact(s) reference the asset, not the uploading connection alone); a
+narrow CSP carve-out for `/assets/*` on the `html` format, whose CSP
+currently blocks *all* outbound requests including same-origin ones —
+not a general network allowance, or this reopens the exfiltration risk
+the sandbox exists to prevent; and a GC policy for orphaned assets
+(uploaded-but-unreferenced, or referenced by an artifact that's since
+been deleted), the same class of problem already flagged for audit-log
+retention.
 
-Notably, the client-facing half of this doesn't require any MCP protocol
-extension — a REST upload endpoint works today for any client that can
-make an HTTP call outside the tool-call channel. The only genuinely new
-surface area is on renderdesk's side.
+**B. Whole-artifact upload via `curl` directly against `/mcp` — no new
+endpoint at all.** Skip the separate-entity idea *and* the "new side-
+channel endpoint" framing: `/mcp` (`app.py:96`, `mcp.streamable_http_app()`)
+is already a plain authenticated HTTP endpoint. A Bash-capable client
+doesn't need renderdesk to grow anything new — it just needs to speak the
+existing Streamable HTTP transport with `curl` instead of relying on its
+own tool-calling loop to type `content` out token by token. The client
+still assembles the *whole* self-contained document itself (base64 images
+inlined as data URIs, no external references — same shape
+`publish_artifact` accepts today, just bigger), but streams it straight
+off disk into an ordinary `tools/call` JSON-RPC request instead of a new
+route. `publish_artifact`/`update_artifact` need zero code changes, and no
+new server surface is added — not even a route.
+
+Worked out against this server's actual SDK config (`mcp_server.py`'s
+`FastMCP(...)` call doesn't set `json_response=True`, so every response is
+SSE-framed, not plain JSON) and **verified end to end against the live
+production instance** (`renderdesk.pythonpowered.net`, server version
+1.28.1) on 2026-08-13 — full handshake succeeded, `publish_artifact`
+returned a real `artifact_id`/`url`, and the page rendered (`200`),
+confirming the base64 `data:` image survived the round trip untouched.
+Two real gotchas surfaced by that run, not obvious from reading the SDK
+alone:
+
+- **Trailing slash matters.** `app.mount("/mcp", ...)` 307-redirects
+  `POST /mcp` (no trailing slash) to `/mcp/` — `curl` doesn't follow
+  redirects by default, so a request to the bare path silently 307s
+  instead of reaching the tool. Always hit `/mcp/`.
+- Every response is SSE-framed exactly as predicted — pull the payload
+  from the `data:` line, don't expect a bare JSON body.
+
+```bash
+BASE="https://renderdesk.example.com"
+TOKEN="<connection bearer token>"
+
+# 1. initialize — no session ID yet; the server mints one and returns it
+#    as a response header, not in the body. Note the trailing slash on
+#    /mcp/ — the bare path 307-redirects and curl won't follow it here.
+curl -s -D /tmp/mcp_headers.txt -o /tmp/mcp_init.txt -X POST "$BASE/mcp/" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-11-25","capabilities":{},
+        "clientInfo":{"name":"curl-client","version":"1.0"}}}'
+SESSION_ID=$(grep -i '^mcp-session-id:' /tmp/mcp_headers.txt | tr -d '\r' | cut -d' ' -f2)
+
+# 2. notifications/initialized — required by the MCP lifecycle before any
+#    other request on the session. It's a notification (no `id`), so the
+#    server 202s it immediately with an empty body, no SSE involved.
+curl -s -o /dev/null -X POST "$BASE/mcp/" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+# 3. tools/call — content streamed straight off disk via jq --rawfile,
+#    never generated by the model as output tokens.
+jq -n --rawfile content page.html \
+  '{jsonrpc:"2.0",id:2,method:"tools/call",params:{name:"publish_artifact",
+    arguments:{content:$content, format:"html", title:"Demo"}}}' \
+| curl -s -X POST "$BASE/mcp/" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "Mcp-Session-Id: $SESSION_ID" \
+    -d @- \
+| grep '^data: ' | sed 's/^data: //' | jq .
+```
+
+`Mcp-Session-Id` is mandatory on every request after `initialize` — a
+missing header 400s, a mismatched one 404s (`streamable_http.py`'s
+`_validate_session`). `Mcp-Protocol-Version` is optional and defaults to
+the SDK's negotiated version when omitted, so the recipe above only sends
+it implicitly.
+
+Because the stored result is byte-identical to what `publish_artifact`
+would have produced through any other client, *no* CSP change is needed —
+the rendered page is exactly as self-contained as it is today. Trade-offs
+unchanged from the original idea: `ArtifactVersion`'s append-only/
+never-diff model means every future edit re-copies the full base64 blob
+even for text-only changes (a cost A's referenced-asset model would have
+avoided), and this still only helps clients with local filesystem/shell
+access (Claude Code, OpenCode) — a browser-only client (Claude on the web,
+ChatGPT) has no channel to reach `/mcp` outside its own tool-calling loop
+at all.
+
+**C. Chunked assembly over MCP tools themselves.** Add tools (e.g.
+`begin_upload`/`append_part`/`finish_upload`) so the client spreads
+content across many smaller tool calls, each within a single response's
+output budget, and the server assembles the parts before finalizing into
+a normal `Artifact` via the same publish/update path as A and B. Unlike
+A and B, this stays entirely inside the MCP tool-call channel — the only
+one of the three that reaches clients with no local filesystem or
+out-of-band HTTP access. Needs new server-side state to hold an
+in-progress upload (a per-connection/upload-id buffer with expiry for
+abandoned uploads), but that fits the existing single-process, in-memory
+pattern already used for `quota_lock`/rate-limit tracking rather than
+needing a new table. Real cost: a multi-MB artifact could take dozens of
+round trips at whatever chunk size stays under one response's output
+budget — far more of the model's own context spent just moving bytes
+than A or B's single request.
+
+These aren't mutually exclusive — B (or A) is the cheap one-round-trip
+path for Bash-capable clients, C is the only one that reaches clients
+confined to the tool-call channel. Worth deciding whether to build more
+than one pathway or accept the browser-client gap for now. Notably, B
+needs no new renderdesk code at all — just a documented `curl` recipe
+against the existing `/mcp` route, worked out above. A still needs a new
+REST endpoint (though also no MCP protocol extension). Only C adds
+genuinely new MCP surface area — new tools, plus server-side state to
+hold an in-progress upload.
