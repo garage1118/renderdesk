@@ -26,7 +26,10 @@ jobs:
         id: meta
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          TAGS="garage1118/renderdesk:${VERSION}"
+          # :edge always moves to the newest tagged release, RC or not —
+          # it's the homelab/testbed tracking tag.
+          TAGS="garage1118/renderdesk:${VERSION}
+          garage1118/renderdesk:edge"
           # A tag with no "-" suffix (e.g. v1.0.0, not v1.0.0-rc1) is a
           # final release — only those move the :latest tag, so an RC or
           # other prerelease never clobbers what :latest points at.
