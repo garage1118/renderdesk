@@ -402,3 +402,35 @@ maintenance, and a new "which libraries" decision), or relaxing CSP to
 permit a specific CDN origin (reopens exactly the self-contained-artifact
 guarantee the rest of this doc treats as a hard rule) — worth deciding
 deliberately if this format sees real use, not backed into incrementally.
+
+**`WWW-Authenticate` header on unauthenticated `/mcp` requests.** A fourth,
+independent gap, found while debugging a real connector setup (Claude.ai)
+that initially failed to connect at all. `MCPAuthMiddleware` (`auth.py`)
+returns a bare `401 {"error": "unauthorized"}` with no `WWW-Authenticate`
+header when a request carries no/invalid bearer token — unlike the `mcp`
+SDK's own `RequireAuthMiddleware`, which sets `WWW-Authenticate: Bearer
+resource_metadata="..."` pointing at the protected-resource metadata URL
+(`/.well-known/oauth-protected-resource/mcp`, already served via
+`create_protected_resource_routes` in `app.py`). Per RFC 9728/the MCP
+authorization spec, that header is the documented mechanism for a client to
+discover OAuth is available and where to find its metadata without already
+knowing to look. Turned out not to be the blocker in that specific case
+(the real cause was a stale `RENDERDESK_PUBLIC_BASE_URL` pointing at
+`localhost`) — some clients fall back to guessing the well-known URL from
+the resource URL alone — but the header is still spec-mandated and worth
+adding for clients that don't have that fallback.
+
+**Renaming an OAuth connection's label.** A fifth, independent gap. A
+personal-token connection gets a user-chosen label at creation
+(`dashboard_create_token` in `dashboard.py`, or `--label` on `renderdesk
+create-token`), but an OAuth-authorized connection's label is set once from
+the client's `client_name` at authorization time (`oauth_provider.py:159`)
+and has no path to change afterward — awkward once a user has several
+same-client connections (e.g. two "Claude" connections from different
+machines) that only `/dashboard/connections` shows and can't tell apart.
+Light lift: `Connection.label` (`models.py`) is already a plain nullable
+string with no OAuth-specific handling, and `dashboard.py` already has
+ownership-scoped, CSRF-protected POST routes for connection actions
+(`revoke`, `delete`) a `rename` route would follow the same shape as, plus
+a small edit to `dashboard_connections.html` for the label cell. Dashboard-
+only, like the rest of connection management — no MCP tool warranted.
