@@ -5,6 +5,7 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
 
 jobs:
   test:
@@ -25,17 +26,24 @@ jobs:
       - name: Determine image tags
         id: meta
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # :edge always moves to the newest tagged release, RC or not —
-          # it's the homelab/testbed tracking tag.
-          TAGS="garage1118/renderdesk:${VERSION}
+          # A manual (workflow_dispatch) run has no version tag to derive
+          # VERSION/latest from — it only ever produces :edge, for pulling
+          # a build ahead of cutting a real release tag.
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAGS="garage1118/renderdesk:edge"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            # :edge always moves to the newest tagged release, RC or not —
+            # it's the homelab/testbed tracking tag.
+            TAGS="garage1118/renderdesk:${VERSION}
           garage1118/renderdesk:edge"
-          # A tag with no "-" suffix (e.g. v1.0.0, not v1.0.0-rc1) is a
-          # final release — only those move the :latest tag, so an RC or
-          # other prerelease never clobbers what :latest points at.
-          if [[ "${VERSION}" != *-* ]]; then
-            TAGS="${TAGS}
+            # A tag with no "-" suffix (e.g. v1.0.0, not v1.0.0-rc1) is a
+            # final release — only those move the :latest tag, so an RC or
+            # other prerelease never clobbers what :latest points at.
+            if [[ "${VERSION}" != *-* ]]; then
+              TAGS="${TAGS}
           garage1118/renderdesk:latest"
+            fi
           fi
           {
             echo "tags<<EOF"
