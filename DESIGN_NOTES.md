@@ -434,3 +434,58 @@ ownership-scoped, CSRF-protected POST routes for connection actions
 (`revoke`, `delete`) a `rename` route would follow the same shape as, plus
 a small edit to `dashboard_connections.html` for the label cell. Dashboard-
 only, like the rest of connection management — no MCP tool warranted.
+
+**Asset upload for MCP clients** (bypassing the tool-call size ceiling). A
+sixth, independent gap, surfaced by a real client trying to publish
+self-contained HTML with embedded photos. `publish_artifact`/
+`update_artifact` require the caller to supply `content` as a literal
+JSON-RPC argument — which means an MCP client has to *generate* the
+entire artifact, byte for byte, as part of its own output. That's a much
+tighter ceiling than anything renderdesk enforces: `max_bytes_per_artifact`
+allows 2MB, but a model's single-response output budget tops out far below
+that in practice, and self-contained HTML with embedded (base64, +33%)
+images is exactly the shape that hits it — a handful of modest photos is
+enough to make a page too large to type out in one tool call, even though
+it's trivially inside every quota this app already has.
+
+No change to `publish_artifact`'s argument shape fixes this, because *any*
+MCP tool argument is still something the calling model has to produce as
+text — the constraint is in the protocol's request path, not in what
+content we accept once it arrives. The actual fix is a side channel that
+never asks the model to reproduce the bytes: a plain authenticated HTTP
+upload endpoint the client can hit directly (even a Bash-capable agent can
+`curl -F` a local file), returning a small reference the model *can*
+cheaply generate, which then goes into `content` as an ordinary `<img
+src>`/`![]()` URL.
+
+Concretely:
+- A new `Asset` table (id, connection_id, content_type, byte_size,
+  `LargeBinary` content, created_at) — mirrors `Artifact`'s
+  content-in-SQLite approach rather than standing up separate object
+  storage, consistent with the single-file/no-external-deps posture
+  everywhere else in this app.
+- `POST /assets` (multipart or raw body), authenticated the same way
+  `/mcp` is — same `Connection` row, so uploads count against that
+  connection's existing quota rather than a parallel one. Needs its own
+  per-request size cap and a decision on whether assets share
+  `max_total_bytes_per_connection` or get a dedicated ceiling.
+- `GET /assets/{id}` to serve them back. Access control is the open
+  question here: require the same bearer token as everything else (which
+  breaks a plain `<img>` tag in a viewer's browser), or follow the
+  referencing artifact's own visibility (public once shared, like the
+  artifact page itself)? Probably the latter, but it means asset access
+  has to be resolved through whatever artifact(s) reference it, not the
+  uploading connection alone.
+- The `html` format's CSP currently blocks *all* outbound requests,
+  including same-origin ones — that blanket rule needs a narrow carve-out
+  for `/assets/*` specifically, not a general network allowance, or this
+  reopens the exfiltration risk the sandbox exists to prevent.
+- Orphaned assets (uploaded, never referenced, or referenced by an
+  artifact that's since been deleted) need the same kind of cleanup story
+  already flagged for audit-log retention — worth deciding the GC policy
+  up front rather than letting it grow unbounded.
+
+Notably, the client-facing half of this doesn't require any MCP protocol
+extension — a REST upload endpoint works today for any client that can
+make an HTTP call outside the tool-call channel. The only genuinely new
+surface area is on renderdesk's side.
