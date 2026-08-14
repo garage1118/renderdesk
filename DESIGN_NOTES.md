@@ -403,23 +403,8 @@ permit a specific CDN origin (reopens exactly the self-contained-artifact
 guarantee the rest of this doc treats as a hard rule) — worth deciding
 deliberately if this format sees real use, not backed into incrementally.
 
-**Renaming an OAuth connection's label.** A fourth, independent gap. A
-personal-token connection gets a user-chosen label at creation
-(`dashboard_create_token` in `dashboard.py`, or `--label` on `renderdesk
-create-token`), but an OAuth-authorized connection's label is set once from
-the client's `client_name` at authorization time (`oauth_provider.py:159`)
-and has no path to change afterward — awkward once a user has several
-same-client connections (e.g. two "Claude" connections from different
-machines) that only `/dashboard/connections` shows and can't tell apart.
-Light lift: `Connection.label` (`models.py`) is already a plain nullable
-string with no OAuth-specific handling, and `dashboard.py` already has
-ownership-scoped, CSRF-protected POST routes for connection actions
-(`revoke`, `delete`) a `rename` route would follow the same shape as, plus
-a small edit to `dashboard_connections.html` for the label cell. Dashboard-
-only, like the rest of connection management — no MCP tool warranted.
-
 **Asset upload for MCP clients** (bypassing the tool-call size ceiling). A
-fifth, independent gap, surfaced by a real client trying to publish
+fourth, independent gap, surfaced by a real client trying to publish
 self-contained HTML with embedded photos. `publish_artifact`/
 `update_artifact` require the caller to supply `content` as a literal
 JSON-RPC argument — which means an MCP client has to *generate* the

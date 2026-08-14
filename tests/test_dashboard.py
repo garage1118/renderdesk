@@ -304,6 +304,56 @@ async def test_revoking_a_personal_token_connection_blocks_it(client):
     assert connection is None
 
 
+async def test_renaming_a_connection_updates_its_label(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="old-label")
+    await _login(client, "dave@example.com", "correct-horse")
+
+    resp = await _post(client, f"/dashboard/connections/{connection_id}/rename", data={"label": "new-label"})
+    assert resp.status_code == 303
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection.label == "new-label"
+
+    connections_resp = await client.get("/dashboard/connections")
+    assert "new-label" in connections_resp.text
+    assert "old-label" not in connections_resp.text
+
+
+async def test_renaming_a_connection_to_blank_clears_the_label(client):
+    user_id = await make_user(email="dave@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id, label="old-label")
+    await _login(client, "dave@example.com", "correct-horse")
+
+    resp = await _post(client, f"/dashboard/connections/{connection_id}/rename", data={"label": "  "})
+    assert resp.status_code == 303
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection.label is None
+
+
+async def test_renaming_another_users_connection_is_rejected(client):
+    owner_id = await make_user(email="owner@example.com", password="owner-pass")
+    connection_id = await make_connection(user_id=owner_id, label="owners-connection")
+    await make_user(email="intruder@example.com", password="intruder-pass")
+    await _login(client, "intruder@example.com", "intruder-pass")
+
+    resp = await _post(client, f"/dashboard/connections/{connection_id}/rename", data={"label": "hijacked"})
+    assert resp.status_code == 404
+
+    async with session_scope() as session:
+        connection = (
+            await session.execute(select(Connection).where(Connection.id == connection_id))
+        ).scalar_one_or_none()
+    assert connection.label == "owners-connection"
+
+
 async def test_deleting_an_active_connection_is_rejected(client):
     user_id = await make_user(email="dave@example.com", password="correct-horse")
     connection_id = await make_connection(user_id=user_id, label="claude-code")

@@ -673,6 +673,28 @@ async def dashboard_revoke_connection(connection_id: str, user: User = Depends(r
     return RedirectResponse(url="/dashboard/connections", status_code=303)
 
 
+@router.post("/dashboard/connections/{connection_id}/rename", dependencies=[Depends(verify_csrf)])
+async def dashboard_rename_connection(
+    connection_id: str, label: str = Form(None), user: User = Depends(require_current_user)
+):
+    async with session_scope() as session:
+        connection = (
+            await session.execute(
+                select(Connection).where(Connection.id == connection_id, Connection.user_id == user.id)
+            )
+        ).scalar_one_or_none()
+        if connection is None:
+            raise HTTPException(status_code=404)
+
+        label = (label or "").strip() or None
+        if label is not None and len(label) > 200:
+            raise HTTPException(status_code=400, detail="Label is too long")
+        connection.label = label
+        await session.commit()
+
+    return RedirectResponse(url="/dashboard/connections", status_code=303)
+
+
 @router.post("/dashboard/connections/{connection_id}/delete", dependencies=[Depends(verify_csrf)])
 async def dashboard_delete_connection(request: Request, connection_id: str, user: User = Depends(require_current_user)):
     async with session_scope() as session:

@@ -30,7 +30,13 @@
     <tbody>
     {% for row in connections %}
     <tr class="{{ 'is-muted' if row.connection.revoked_at else '' }}">
-      <td>{{ row.connection.label or "—" }}</td>
+      <td data-sort-value="{{ row.connection.label or '' }}">
+        <form method="post" action="/dashboard/connections/{{ row.connection.id }}/rename" class="field-row" style="max-width:220px">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <input type="text" name="label" value="{{ row.connection.label or '' }}" placeholder="—">
+          <button type="submit" class="btn btn-sm">Save</button>
+        </form>
+      </td>
       <td>{{ row.kind }}{% if row.client_name %} ({{ row.client_name }}){% endif %}</td>
       <td>{{ row.connection.created_at }}</td>
       <td><span class="badge {{ 'badge-revoked' if row.connection.revoked_at else 'badge-active' }}">{{ "Revoked" if row.connection.revoked_at else "Active" }}</span></td>
