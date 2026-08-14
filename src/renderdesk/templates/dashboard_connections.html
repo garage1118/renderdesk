@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/styles.css">
 <script src="/static/theme.js"></script>
 <script src="/static/sortable-table.js"></script>
+<script src="/static/connection-rename.js"></script>
 {% set active_nav = "connections" %}
 {% include "_topbar.html" %}
 <main class="page">
@@ -31,7 +32,7 @@
     {% for row in connections %}
     <tr class="{{ 'is-muted' if row.connection.revoked_at else '' }}">
       <td data-sort-value="{{ row.connection.label or '' }}">
-        <form method="post" action="/dashboard/connections/{{ row.connection.id }}/rename" class="field-row" style="max-width:220px">
+        <form method="post" action="/dashboard/connections/{{ row.connection.id }}/rename" class="field-row rename-form" style="max-width:220px">
           <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
           <input type="text" name="label" value="{{ row.connection.label or '' }}" placeholder="—">
           <button type="submit" class="btn btn-sm">Save</button>
