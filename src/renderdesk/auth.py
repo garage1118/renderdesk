@@ -8,6 +8,7 @@ from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from renderdesk.config import settings
 from renderdesk.db import session_scope
 from renderdesk.models import Connection, utcnow
 
@@ -79,7 +80,12 @@ class MCPAuthMiddleware:
                     connection_id = access_token.subject
 
         if connection_id is None:
-            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            resource_metadata_url = f"{settings.public_base_url}/.well-known/oauth-protected-resource/mcp"
+            response = JSONResponse(
+                {"error": "unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata_url}"'},
+            )
             await response(scope, receive, send)
             return
 

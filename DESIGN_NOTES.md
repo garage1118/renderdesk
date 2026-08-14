@@ -403,24 +403,7 @@ permit a specific CDN origin (reopens exactly the self-contained-artifact
 guarantee the rest of this doc treats as a hard rule) — worth deciding
 deliberately if this format sees real use, not backed into incrementally.
 
-**`WWW-Authenticate` header on unauthenticated `/mcp` requests.** A fourth,
-independent gap, found while debugging a real connector setup (Claude.ai)
-that initially failed to connect at all. `MCPAuthMiddleware` (`auth.py`)
-returns a bare `401 {"error": "unauthorized"}` with no `WWW-Authenticate`
-header when a request carries no/invalid bearer token — unlike the `mcp`
-SDK's own `RequireAuthMiddleware`, which sets `WWW-Authenticate: Bearer
-resource_metadata="..."` pointing at the protected-resource metadata URL
-(`/.well-known/oauth-protected-resource/mcp`, already served via
-`create_protected_resource_routes` in `app.py`). Per RFC 9728/the MCP
-authorization spec, that header is the documented mechanism for a client to
-discover OAuth is available and where to find its metadata without already
-knowing to look. Turned out not to be the blocker in that specific case
-(the real cause was a stale `RENDERDESK_PUBLIC_BASE_URL` pointing at
-`localhost`) — some clients fall back to guessing the well-known URL from
-the resource URL alone — but the header is still spec-mandated and worth
-adding for clients that don't have that fallback.
-
-**Renaming an OAuth connection's label.** A fifth, independent gap. A
+**Renaming an OAuth connection's label.** A fourth, independent gap. A
 personal-token connection gets a user-chosen label at creation
 (`dashboard_create_token` in `dashboard.py`, or `--label` on `renderdesk
 create-token`), but an OAuth-authorized connection's label is set once from
@@ -436,7 +419,7 @@ a small edit to `dashboard_connections.html` for the label cell. Dashboard-
 only, like the rest of connection management — no MCP tool warranted.
 
 **Asset upload for MCP clients** (bypassing the tool-call size ceiling). A
-sixth, independent gap, surfaced by a real client trying to publish
+fifth, independent gap, surfaced by a real client trying to publish
 self-contained HTML with embedded photos. `publish_artifact`/
 `update_artifact` require the caller to supply `content` as a literal
 JSON-RPC argument — which means an MCP client has to *generate* the

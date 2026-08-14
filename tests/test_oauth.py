@@ -126,7 +126,7 @@ async def _dummy_inner_app(scope, receive, send):
     await send({"type": "http.response.body", "body": body})
 
 
-async def _through_mcp_auth_middleware(access_token: str | None) -> tuple[int, bytes]:
+async def _through_mcp_auth_middleware(access_token: str | None) -> tuple[int, bytes, dict[str, str]]:
     """Exercises the real MCPAuthMiddleware (auth.py) — including the OAuth
     fallback branch this stage added — against a trivial stub inner app,
     rather than standing up FastMCP's full session manager just to prove a
@@ -142,11 +142,12 @@ async def _through_mcp_auth_middleware(access_token: str | None) -> tuple[int, b
     async def send(message):
         if message["type"] == "http.response.start":
             result["status"] = message["status"]
+            result["headers"] = {k.decode(): v.decode() for k, v in message.get("headers", [])}
         elif message["type"] == "http.response.body":
             result["body"] = message.get("body", b"")
 
     await middleware(scope, receive, send)
-    return result["status"], result.get("body", b"")
+    return result["status"], result.get("body", b""), result.get("headers", {})
 
 
 async def test_full_pkce_round_trip_authenticates(client):
@@ -160,7 +161,7 @@ async def test_full_pkce_round_trip_authenticates(client):
     access_token = await oauth_provider.load_access_token(token_data["access_token"])
     assert access_token is not None
 
-    status, body = await _through_mcp_auth_middleware(token_data["access_token"])
+    status, body, _ = await _through_mcp_auth_middleware(token_data["access_token"])
     assert status == 200
     assert body == f"connection={access_token.subject}".encode()
 
@@ -237,7 +238,7 @@ async def test_reused_refresh_token_revokes_connection(client):
 
     # ...and must revoke the whole connection, killing even the legitimately
     # rotated access token.
-    status, _ = await _through_mcp_auth_middleware(new_token_data["access_token"])
+    status, _, _ = await _through_mcp_auth_middleware(new_token_data["access_token"])
     assert status == 401
 
 
@@ -276,13 +277,19 @@ async def test_revoking_connection_invalidates_oauth_access_token(client):
     )
     assert resp.status_code == 303
 
-    status, _ = await _through_mcp_auth_middleware(token_data["access_token"])
+    status, _, _ = await _through_mcp_auth_middleware(token_data["access_token"])
     assert status == 401
 
 
 async def test_missing_or_unknown_token_is_unauthorized():
-    status, _ = await _through_mcp_auth_middleware(None)
+    status, _, headers = await _through_mcp_auth_middleware(None)
     assert status == 401
+    # RFC 9728: unauthenticated /mcp requests must point clients at the
+    # protected-resource metadata so they can discover OAuth without
+    # already knowing to look for it.
+    assert headers["www-authenticate"] == (
+        'Bearer resource_metadata="http://localhost:8000/.well-known/oauth-protected-resource/mcp"'
+    )
 
-    status, _ = await _through_mcp_auth_middleware("not-a-real-token")
+    status, _, _ = await _through_mcp_auth_middleware("not-a-real-token")
     assert status == 401
