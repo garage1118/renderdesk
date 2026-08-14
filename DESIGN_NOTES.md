@@ -455,7 +455,15 @@ inlined as data URIs, no external references — same shape
 `publish_artifact` accepts today, just bigger), but streams it straight
 off disk into an ordinary `tools/call` JSON-RPC request instead of a new
 route. `publish_artifact`/`update_artifact` need zero code changes, and no
-new server surface is added — not even a route.
+new HTTP surface is added — not even a route. The one thing that *did*
+need adding: the recipe below is otherwise invisible to the calling model,
+which has no way to discover a workaround that lives entirely outside the
+tool-call channel it's confined to. `mcp_server.py` exposes it as a second
+MCP prompt, `upload_large_artifact` (parallel to the existing
+`publish_artifact` prompt) — discoverable by any client implementing the
+prompts capability, with `publish_artifact`'s own tool docstring pointing
+at it so a model that's about to choke on a big payload has a chance to
+find the escape hatch before failing.
 
 Worked out against this server's actual SDK config (`mcp_server.py`'s
 `FastMCP(...)` call doesn't set `json_response=True`, so every response is
@@ -550,9 +558,9 @@ than A or B's single request.
 These aren't mutually exclusive — B (or A) is the cheap one-round-trip
 path for Bash-capable clients, C is the only one that reaches clients
 confined to the tool-call channel. Worth deciding whether to build more
-than one pathway or accept the browser-client gap for now. Notably, B
-needs no new renderdesk code at all — just a documented `curl` recipe
-against the existing `/mcp` route, worked out above. A still needs a new
-REST endpoint (though also no MCP protocol extension). Only C adds
-genuinely new MCP surface area — new tools, plus server-side state to
-hold an in-progress upload.
+than one pathway or accept the browser-client gap for now. B is
+implemented (as of 2026-08-13): no new HTTP endpoint, just the documented
+`curl` recipe above surfaced through the `upload_large_artifact` MCP
+prompt. A still needs a new REST endpoint (though also no MCP protocol
+extension). Only C adds genuinely new MCP surface area — new tools, plus
+server-side state to hold an in-progress upload.
