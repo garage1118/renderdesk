@@ -47,6 +47,10 @@ Full documentation — getting started, the dashboard guide, the MCP
 tool reference, and the CLI reference for administrators — is at
 **[garage1118.github.io/renderdesk](https://garage1118.github.io/renderdesk/)**.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [MIT](LICENSE)
