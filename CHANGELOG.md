@@ -16,6 +16,38 @@ All notable changes to this project are documented in this file.
 - Bootstrap Icons (`bi bi-<name>` classes), vendored as CSS + webfont —
   usable in both `react` and `html` with no import at all.
 
+### Changed
+
+- **Breaking (MCP):** a comment's `author` is now the real identity behind
+  it — the email of the person who wrote it, or the label of the agent
+  connection that did — instead of the bare string `"human"`/`"agent"`. A
+  new `author_kind` field carries that human-vs-agent distinction, since a
+  connection label and an email address aren't distinguishable by shape.
+  Clients keying off `author == "agent"` need to read `author_kind`
+  instead. Both fields are user-authored text and, like a comment body,
+  are not to be treated as instructions. The dashboard now shows who
+  actually said what, rather than rendering every participant in a thread
+  as "human" or "agent".
+- Artifact version history records each version's `byte_size` instead of
+  measuring it from content on every page render, and the dashboard's
+  artifact list, version history, "Shared with you" section and the
+  `list_artifacts` MCP tool no longer load artifact content they never
+  display. Version history is not quota-capped, so the version-history
+  page — the one you visit to prune it — previously read every superseded
+  version's full body into memory just to show a list of sizes.
+- Migrations `0001`-`0009` are collapsed into a single baseline. The
+  baseline keeps the revision id `0009_oidc_identities`, which every
+  published image ships as its head, so existing installations resolve it
+  and simply have nothing to re-run — no manual `alembic stamp`, and
+  upgrades stay unattended on hosts we can't reach.
+
+### Fixed
+
+- `update_artifact` rejected `format="react"`: the MCP tool's schema still
+  listed only the four pre-React formats, so an artifact could be
+  published as `react` but never converted to it, and a client restating
+  the current format on update got an unresolvable validation error.
+
 ## [1.1.0] - 2026-08-14
 
 ### Added
