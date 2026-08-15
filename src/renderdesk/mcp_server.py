@@ -56,7 +56,7 @@ async def update_artifact(
     artifact_id: str,
     content: str,
     base_version: int,
-    format: Literal["html", "markdown", "code", "csv"] | None = None,
+    format: Literal["html", "markdown", "code", "csv", "react"] | None = None,
     title: str | None = None,
     language: str | None = None,
 ) -> dict:
