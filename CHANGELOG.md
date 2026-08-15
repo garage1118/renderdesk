@@ -41,12 +41,25 @@ All notable changes to this project are documented in this file.
   and simply have nothing to re-run — no manual `alembic stamp`, and
   upgrades stay unattended on hosts we can't reach.
 
+- The hourly cleanup loop now also sweeps expired dashboard sessions and
+  the in-memory rate-limit/login-lockout counters. Each was only ever
+  pruned as a side effect of someone touching the same row or key again,
+  which never happens for abandoned ones — and the counters are keyed by
+  client IP and submitted email, both chosen by unauthenticated callers,
+  so they grew without bound for the lifetime of the process.
+
 ### Fixed
 
 - `update_artifact` rejected `format="react"`: the MCP tool's schema still
   listed only the four pre-React formats, so an artifact could be
   published as `react` but never converted to it, and a client restating
   the current format on update got an unresolvable validation error.
+- Artifact responses now state `X-Frame-Options: SAMEORIGIN` to match the
+  `frame-ancestors 'self'` in their CSP, instead of inheriting the
+  dashboard's `DENY` default and contradicting it. No behaviour change —
+  browsers ignore `X-Frame-Options` when `frame-ancestors` is present, so
+  the same-origin iframe used to render `html`/`react` artifacts was
+  already working, just on a spec fallback rather than on intent.
 
 ## [1.1.0] - 2026-08-14
 
