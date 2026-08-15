@@ -8,7 +8,6 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from pydantic import AnyHttpUrl
@@ -27,6 +26,7 @@ from renderdesk.oauth_provider import oauth_provider, sweep_expired_oauth_rows
 from renderdesk.rate_limit import RateLimitMiddleware, sweep_stale_attempts
 from renderdesk.security_headers import SecurityHeadersMiddleware
 from renderdesk.session_auth import sweep_expired_sessions, sweep_stale_failed_logins
+from renderdesk.static_files import CORSStaticFiles
 from renderdesk.view import router as view_router
 
 _SWEEP_INTERVAL = timedelta(hours=1)
@@ -104,7 +104,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+app.mount("/static", CORSStaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 # Mounted on the top-level app (not nested under /mcp) so paths match
 # issuer_url cleanly, and so this doesn't stack a second bearer-auth layer on
