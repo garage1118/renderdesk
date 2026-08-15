@@ -54,6 +54,14 @@ All notable changes to this project are documented in this file.
   listed only the four pre-React formats, so an artifact could be
   published as `react` but never converted to it, and a client restating
   the current format on update got an unresolvable validation error.
+- Bootstrap Icons never rendered in `html` or `react` artifacts — every
+  `bi-*` icon showed as a tofu box of its raw Private Use Area codepoint
+  (e.g. `F589` for `bi-stars`). Artifacts are served from a sandboxed
+  iframe with no `allow-same-origin`, giving them an opaque origin, and
+  webfonts are the one subresource type always fetched in CORS mode — so
+  the vendored woff2 was blocked while the stylesheet, which isn't
+  CORS-gated, loaded and inserted the glyph placeholder. `/static` is now
+  served with `Access-Control-Allow-Origin: *`; the sandbox is unchanged.
 - Artifact responses now state `X-Frame-Options: SAMEORIGIN` to match the
   `frame-ancestors 'self'` in their CSP, instead of inheriting the
   dashboard's `DENY` default and contradicting it. No behaviour change —
