@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `react` artifacts can now import `three`, `lodash`, `d3`, `mathjs`,
+  `chart.js`/`chart.js/auto`, `tone`, `papaparse`, and `xlsx` (SheetJS), each
+  vendored from its official standalone/UMD build and loaded only when an
+  artifact actually imports it. `html` artifacts get the same 8 libraries
+  via a `cdnjs.cloudflare.com` URL rewrite: a `<script src>` referencing one
+  of them on cdnjs is transparently swapped for the same-origin vendored
+  copy, so a model reaching for the URL pattern it already knows just works.
+- Bootstrap Icons (`bi bi-<name>` classes), vendored as CSS + webfont —
+  usable in both `react` and `html` with no import at all.
+
 ## [1.1.0] - 2026-08-14
 
 ### Added

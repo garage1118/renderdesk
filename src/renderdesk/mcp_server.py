@@ -36,9 +36,14 @@ async def publish_artifact(
     (not executed) — pass language (e.g. "python", "rust") to drive highlighting; an omitted or
     unrecognized language falls back to plain text. For format="csv", content is rendered as an
     HTML table (first row treated as a header) with drag-resizable columns. For format="react",
-    content is a JSX/TSX module whose default export is mounted as the root component — only
-    "react" and "react-dom" are available to import, no other packages (there's no bundler, so an
-    import of anything else fails at render time with a readable error instead of a blank page).
+    content is a JSX/TSX module whose default export is mounted as the root component — "react"
+    and "react-dom" are always available; also importable, only if actually used (each adds its
+    own <script>, so nothing loads that isn't imported): "three" (global THREE — core only, no
+    OrbitControls/loaders), "lodash", "d3", "mathjs", "chart.js" or "chart.js/auto" (global
+    Chart), "tone", "papaparse", "xlsx" (SheetJS). No other packages — no bundler, so any other
+    import fails at render time with a readable error instead of a blank page. Icons: a
+    Bootstrap Icons class (e.g. className="bi bi-camera") works without any import — it's CSS,
+    not a JS package — in both format="react" and format="html".
     If content is too large to generate as tool-call output in one response (e.g. self-contained
     HTML with embedded base64 images), see the "upload_large_artifact" prompt instead."""
     connection_id = get_current_connection_id()
@@ -138,16 +143,25 @@ def publish_artifact_prompt(content: str, title: str = "") -> str:
         "- Use `html` only when custom layout, styling, or interactivity is actually "
         "needed beyond what markdown covers. renderdesk serves html artifacts inside a "
         "sandboxed iframe with a CSP that blocks all outbound network from the artifact "
-        "(no CDN scripts/fonts/images/fetch) — every dependency must be inlined or "
-        "embedded as a data URI, or it silently fails to load with no visible error.\n"
+        "— every dependency must be inlined, embedded as a data URI, or be one of the "
+        "vendored libraries below, or it silently fails to load with no visible error. "
+        "A <script src=\"https://cdnjs.cloudflare.com/ajax/libs/...\"> tag for one of "
+        "those vendored libraries is transparently rewritten to a same-origin copy and "
+        "works; any other external URL does not load.\n"
         "- Use `code` for read-only syntax-highlighted source; pass `language` (e.g. "
         '"python") — an unrecognized or omitted language falls back to plain text.\n'
         "- Use `csv` for tabular data; the first row is treated as the header.\n"
         "- Use `react` for an interactive component: content is a JSX/TSX module with a "
-        "default export, transpiled and mounted client-side. Only `react`/`react-dom` are "
-        "importable — no bundler, so any other import (an icon set, a chart library, "
-        "Tailwind, ...) fails at render time. Style with inline `style` props or a literal "
-        "`<style>` tag in the JSX, not a Tailwind className.\n\n"
+        "default export, transpiled and mounted client-side. `react`/`react-dom` are "
+        "always available; no bundler, so any import beyond the vendored libraries below "
+        "fails at render time instead of silently 404ing. Style with inline `style` props "
+        "or a literal `<style>` tag in the JSX, not a Tailwind className.\n"
+        "- Vendored libraries, usable in both `html` (via the cdnjs URL above) and "
+        "`react` (via `import`): `three` (global `THREE` — core only, no "
+        "OrbitControls/loaders), `lodash`, `d3`, `mathjs`, `chart.js`/`chart.js/auto` "
+        "(global `Chart`), `tone`, `papaparse`, `xlsx` (SheetJS). Icons: a Bootstrap "
+        'Icons class (e.g. `class="bi bi-camera"` / `className="bi bi-camera"`) works '
+        "in either format with no import at all — it's CSS, not a JS package.\n\n"
         f"Title: {title or '(infer a short, descriptive title from the content)'}\n\n"
         "Content to publish:\n---\n"
         f"{content}\n"

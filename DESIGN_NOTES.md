@@ -72,18 +72,74 @@ intentionally narrower: content is a JSX/TSX module source (no build
 step), transpiled in-browser by a vendored Babel standalone and mounted
 via vendored React/ReactDOM UMD builds — same sandboxed-iframe/CSP
 treatment as `html`. A small hand-written CommonJS shim
-(`static/react-init.js`) backs `require`/`import` for exactly `react` and
-`react-dom`; anything else throws a readable in-page error rather than
-silently failing like an unresolved CDN import would. Concretely this
-means no Tailwind, no icon/chart libraries, no `fetch` (`connect-src
-'none'` still applies) — components style themselves via inline `style`
-props or a literal `<style>` tag in the JSX. The wrapper page needs no
-`unsafe-inline` in its CSP at all (tighter than `html`'s), since every
-`<script>` it emits is one of ours; the JSX source itself is embedded as
-inert JSON text, reaching Babel only via `JSON.parse`, never parsed as
-markup. Broadening this to arbitrary npm imports is a real possible
-future direction, but a separate, bigger decision — see Limitations and
-roadmap.
+(`static/react-init.js`) backs `require`/`import` for `react`/`react-dom`
+plus a curated, bounded set of vendored libraries (below); anything else
+throws a readable in-page error rather than silently failing like an
+unresolved CDN import would. The wrapper page needs no `unsafe-inline` in
+its CSP at all (tighter than `html`'s) for scripts, since every `<script>`
+it emits is one of ours; the JSX source itself is embedded as inert JSON
+text, reaching Babel only via `JSON.parse`, never parsed as markup.
+
+**A curated, bounded library set is vendored for both `react` and `html`**
+(shipped 2026-08-15). Each has an official standalone/UMD browser build,
+so it's vendored the same download-and-pin way as React/Mermaid/KaTeX —
+no bundler: Three.js (`three`, global `THREE` — pinned at r160
+deliberately, not latest: r161 dropped the classic global-exposing build
+in favor of ES-module-only output, so this is the newest release that
+still has one; core only, no `OrbitControls`/loaders), Lodash (`lodash`,
+`_`), D3 (`d3`, `d3`), MathJS (`mathjs`, `math` — no official minified
+build exists, vendored unminified), Chart.js (`chart.js`/`chart.js/auto`,
+both → `Chart`, since the UMD build already auto-registers every
+controller/element/plugin), Tone.js (`tone`, `Tone` — also no official
+minified build), PapaParse (`papaparse`, `Papa`), and SheetJS (`xlsx`,
+`XLSX` — the one exception to "same source as everything else": SheetJS
+moved off the public npm registry after v0.18.6, so this comes from
+`cdn.sheetjs.com`, not jsDelivr/unpkg). Total added vendor payload: ~3.4MB
+uncompressed across all 8 (Three.js and SheetJS's `xlsx.full.min.js` are
+the heaviest, each several hundred KB–1MB) — see the Docker image size
+note this replaced, below.
+
+In `react`, each library's `<script>` tag is only emitted if the artifact's
+source actually imports it (a regex per specifier, `view.py`'s
+`_optional_react_assets` — same rigor as `_MERMAID_CLASS_RE`, not a real
+JS parser, with `react-init.js`'s `requireShim` doing an `undefined` check
+as a backstop for anything the regex misses). In `html`, a `<script src>`
+referencing one of these 8 libraries via the same `cdnjs.cloudflare.com`
+path Claude's own artifact sandbox uses gets transparently rewritten
+in-place to the same-origin vendored file
+(`_rewrite_cdn_library_urls`) — matched on the cdnjs "slug" (which doesn't
+always match the npm package name — e.g. lodash's is `lodash.js`) plus a
+version wildcard, not an exact URL. Both paths only ever add `'self'` to
+`script-src`, never widen it to an actual external origin.
+
+**Icons: Bootstrap Icons, not Lucide React** (shipped alongside the above).
+Lucide React has the same no-official-UMD problem Recharts does below
+(would need the same esbuild pipeline for no real gain), and Feather (the
+closer sibling — Lucide is a community fork/continuation of it) does have
+an official UMD build but fights React's render cycle — it mutates the DOM
+outside React via `feather.replace()`, so a re-render can wipe icons it
+just inserted. Bootstrap Icons (MIT, ~2000 icons) sidesteps the category
+entirely: it's CSS-class-based (`class`/`className="bi bi-camera"`), not a
+JS import at all, so it needs no `requireShim` entry and works identically
+in `html` and `react` — both driven by the same `_BOOTSTRAP_ICONS_CLASS_RE`
+(a `class`/`className` regex, same shape as the mermaid-class check):
+`html`'s `_inject_bootstrap_icons_if_present` splices a `<link>` near
+`</body>` (mermaid's pattern), while `react`'s `_build_react_raw_html`
+checks the same regex against the JSX source directly and includes the
+`<link>` in the assembled wrapper page. Both point at the same vendored
+CSS + webfont (`static/vendor/bootstrap-icons/`, woff2 only — the woff
+fallback wasn't vendored, since every realistic viewer supports woff2).
+This widens
+`style-src`/`font-src` instead of `script-src`, so it's tracked as an
+independent CSP axis from the library-import mechanism above — an
+icons-only artifact doesn't get `script-src` widened, and a
+library-import-only artifact doesn't get `style-src`/`font-src` widened.
+
+Discoverability rides the existing self-describing MCP surfaces:
+`publish_artifact`'s tool docstring and its MCP prompt (`mcp_server.py`)
+both enumerate the vendored libraries and the Bootstrap Icons convention.
+
+Recharts remains unvendored — see Limitations and roadmap.
 
 **MCP tool surface** is intentionally narrow:
 ```
@@ -392,95 +448,21 @@ remains. Until Postgres/multi-worker support lands, using one token per
 real concurrent caller (rather than sharing a single MCP token across many
 agents) is a free mitigation for this specific bottleneck.
 
-**Vendoring a curated library set for React/HTML artifacts.** A third,
-independent direction, unrelated to auth or process topology. Today's
-`react` format (see Design principles above) only has `react`/`react-dom`
-in scope, and `html` artifacts can't reach any external script at all —
-neither matches what real Claude-generated artifacts commonly import
-(charting/icon/3D/data libraries), because Claude.ai's own artifact
-sandbox resolves those either from a `cdnjs.cloudflare.com` allowlist
-(`html`) or via `esm.sh` on-the-fly bundling (`react`), both of which are
-exactly the external-network dependency renderdesk's self-contained-
-artifact rule forbids.
-
-Designed (2026-08-15), not yet built — a design pass scoped this into two
-tiers and picked a first-phase library set with the user, but
-implementation is on hold pending the Docker image size question below:
-- **Tier 1 — 8 libraries with an official standalone/UMD browser build**,
-  vendorable the same way React/Mermaid/KaTeX already are (download a
-  pinned file, wire it up, no new tooling): Three.js (`three`, global
-  `THREE` — core only, `OrbitControls`/loaders live in ES-module-only
-  `examples/jsm/*` and aren't reachable this way), Lodash (`lodash`, `_`),
-  D3 (`d3`, `d3`), MathJS (`mathjs`, `math`), Chart.js (`chart.js` and
-  `chart.js/auto`, both → `Chart`, since the UMD build already
-  auto-registers everything), Tone.js (`tone`, `Tone`), PapaParse
-  (`papaparse`, `Papa`), and SheetJS (`xlsx`, `XLSX` — the one exception
-  to "same as React": SheetJS moved off the public npm registry after
-  v0.18.6, so this has to come from `cdn.sheetjs.com`, not
-  jsDelivr/unpkg).
-- **Tier 2 — Recharts — deferred, separate future decision.** No official
-  UMD build; Claude.ai gets it via `esm.sh` bundling on demand. Vendoring
-  it for real needs a new esbuild-based local bundling step (dev-time
-  only, run by a maintainer when pinning a version, never at runtime, with
-  `react`/`react-dom` marked external so it hooks into the existing
-  vendored globals) — a standing process, not a one-off download, so it's
-  a bigger addition than Tier 1 and was deliberately not bundled into this
-  pass. `shadcn/ui` doesn't fit this model at all regardless of tier —
-  it's copy-paste source generated against Radix+Tailwind, not an
-  installable package.
-- **Icons — Bootstrap Icons, not Lucide React, and not gated on Tier 2.**
-  Lucide React has the same no-official-UMD problem as Recharts (would
-  need the same esbuild pipeline for no real gain), and Feather (the
-  closer sibling — Lucide is a community fork/continuation of it, so icon
-  names mostly carry over) does have an official UMD build (`feather.min.js`,
-  global `feather`, `feather.replace()` swaps `data-feather="camera"`
-  elements for inline SVG) but fights React's render cycle — it mutates
-  the DOM outside React, so a re-render can wipe icons it just inserted,
-  needing a `useEffect` re-invocation dance the model isn't trained to
-  reach for. Bootstrap Icons (MIT, ~2000 icons) sidesteps the whole
-  category of problem: it's CSS-class-based (`<i class="bi bi-camera">`),
-  not a JS import at all, so it needs no `requireShim` entry, no bundler
-  question, and works identically in `html` and `react` with the same
-  vendored CSS + font/SVG-sprite file — the same shape as KaTeX's already-
-  vendored fonts, not a new mechanism. Effectively independent of the
-  Tier 1/Tier 2 split above; could ship without waiting on either.
-
-Mechanism, as designed: `static/react-init.js`'s `requireShim` becomes a
-lookup table (specifier → global name) instead of a hardcoded if/else, so
-it scales past 2 entries without becoming unreadable, with an
-`undefined`-check backstop that still produces the existing readable
-in-page error if detection below has a false negative. `_REACT_ASSETS`
-becomes conditional per artifact — a regex per specifier (compiled once,
-same rigor as the existing `_MERMAID_CLASS_RE`) scans `artifact.content`
-for a matching `import`/`require` before that library's `<script>` tag is
-emitted at all, so a react artifact that doesn't use Three.js doesn't pay
-for loading it. For `html`, a new function alongside (not a
-generalization of) `_inject_mermaid_if_present` matches
-`cdnjs.cloudflare.com/ajax/libs/<slug>/<version>/...` script tags for
-these same libraries and rewrites them in place to the vendored
-same-origin equivalent — publishers write the URL pattern they're already
-trained to reach for, and it resolves without ever leaving same-origin.
-CSP handling stays a two-way switch (`_HTML_CSP` vs. one
-same-origin-scripts variant), OR'd across however many of {mermaid, cdnjs
-rewrite} fired, never a per-library CSP addition.
-
-Discoverability rides the existing self-describing MCP surfaces, no new
-tool/resource needed: `publish_artifact`'s tool docstring (`mcp_server.py`,
-returned in `tools/list`, so every client sees it) and the
-`publish_artifact` MCP prompt (richer guidance, reached only by clients
-implementing the prompts capability) both currently state the
-`react`/`react-dom`-only and no-CDN-for-`html` restrictions explicitly —
-both need rewriting to enumerate the 8 once shipped, or agents have no way
-to learn the restriction lifted.
-
-**Open blocker: Docker image size.** The deployed image is ~90MB on
-Docker Hub today. Eight new vendored minified libraries (Three.js and
-SheetJS's `xlsx.full.min.js` are the heaviest, each several hundred KB;
-the full set is roughly low-single-digit MB uncompressed — not yet
-precisely measured) is a real, if modest, percentage increase to a
-homelab-deployed single image, and David wants to weigh that before
-committing rather than shipping it reflexively. Revisit once that
-tradeoff is settled — no code changes exist yet for any of the above.
+**Recharts (and other no-official-UMD libraries) for React artifacts.**
+Independent of auth/process topology. The Tier 1 vendored library set and
+Bootstrap Icons shipped 2026-08-15 (see "React artifacts" and "A curated,
+bounded library set" above) — Recharts was deliberately left out of that
+pass, the one candidate from the original reverse-engineered Claude
+Artifacts roster with no official standalone/UMD build (Claude.ai gets it
+via `esm.sh` bundling on demand). Vendoring it for real needs a new
+esbuild-based local bundling step (dev-time only, run by a maintainer when
+pinning a version, never at runtime, with `react`/`react-dom` marked
+external so it hooks into the already-vendored globals instead of bundling
+its own copy) — a standing process, not a one-off download, so it's a
+bigger addition than everything shipped so far and wasn't bundled into
+that pass. `shadcn/ui` doesn't fit this model at all — it's copy-paste
+source generated against Radix+Tailwind, not an installable package, and
+isn't a candidate regardless of tooling.
 
 **Asset upload for MCP clients** (bypassing the tool-call size ceiling). A
 fourth, independent gap, surfaced by a real client trying to publish
