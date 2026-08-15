@@ -29,6 +29,39 @@ def record_attempt(bucket: str, key: str) -> None:
     _attempts[(bucket, key)].append(utcnow())
 
 
+# (bucket, max_attempts, window) per rate-limited endpoint. Module-level
+# rather than a class attribute on the middleware so _MAX_WINDOW below can
+# be derived from it — a new rule with a longer window then widens the
+# sweep automatically instead of silently outliving it.
+_RULES: dict[tuple[str, str], tuple[str, int, timedelta]] = {
+    ("POST", "/register"): ("register", 5, timedelta(hours=1)),
+    ("GET", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
+    ("POST", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
+    ("POST", "/token"): ("oauth_coarse", 60, timedelta(minutes=5)),
+    ("POST", "/revoke"): ("oauth_coarse", 60, timedelta(minutes=5)),
+    ("POST", "/dashboard/login"): ("login_ip", 20, timedelta(minutes=15)),
+}
+_MAX_WINDOW = max(window for _, _, window in _RULES.values())
+
+
+def sweep_stale_attempts() -> int:
+    """Drops entries whose newest attempt already fell out of the longest
+    configured window, so none of them can still be limiting anything.
+
+    is_rate_limited prunes timestamps, but only for a key someone asks
+    about again — an entry touched once and never revisited is never
+    reconsidered. Since the keys here are client IPs chosen by
+    unauthenticated callers, that's unbounded growth from remote input:
+    rotating source addresses adds a dict entry per address for the
+    lifetime of the process. Small per entry, never reclaimed. Called from
+    app.py's sweep loop."""
+    cutoff = utcnow() - _MAX_WINDOW
+    stale = [key for key, times in _attempts.items() if not times or max(times) <= cutoff]
+    for key in stale:
+        del _attempts[key]
+    return len(stale)
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Coarse, per-IP flood protection for the endpoints that had none at
     all: dynamic client registration (unauthenticated, unbounded, and each
@@ -42,17 +75,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Starlette only honors X-Forwarded-For from a configured reverse proxy.
     """
 
-    _RULES: dict[tuple[str, str], tuple[str, int, timedelta]] = {
-        ("POST", "/register"): ("register", 5, timedelta(hours=1)),
-        ("GET", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
-        ("POST", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
-        ("POST", "/token"): ("oauth_coarse", 60, timedelta(minutes=5)),
-        ("POST", "/revoke"): ("oauth_coarse", 60, timedelta(minutes=5)),
-        ("POST", "/dashboard/login"): ("login_ip", 20, timedelta(minutes=15)),
-    }
-
     async def dispatch(self, request: Request, call_next):
-        rule = self._RULES.get((request.method, request.url.path))
+        rule = _RULES.get((request.method, request.url.path))
         if rule is not None:
             bucket, max_attempts, window = rule
             client_ip = request.client.host if request.client else "unknown"

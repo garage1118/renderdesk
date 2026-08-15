@@ -42,6 +42,19 @@ def clear_failed_logins(email: str) -> None:
     _failed_logins.pop(email, None)
 
 
+def sweep_stale_failed_logins() -> int:
+    """Drops entries whose newest failure already fell out of the lockout
+    window. Same unbounded-growth shape as rate_limit.sweep_stale_attempts,
+    and worse in one respect: the key here is the *submitted* email, so an
+    unauthenticated caller picks it outright and a fresh address per attempt
+    adds an entry that nothing revisits. Called from app.py's sweep loop."""
+    cutoff = utcnow() - _LOGIN_LOCKOUT_WINDOW
+    stale = [email for email, attempts in _failed_logins.items() if not attempts or max(attempts) <= cutoff]
+    for email in stale:
+        del _failed_logins[email]
+    return len(stale)
+
+
 def verify_password(user: User, password: str) -> bool:
     if user.password_hash is None:
         # An OIDC-provisioned user, or an instance switched back to

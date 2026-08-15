@@ -24,9 +24,9 @@ from renderdesk.db import engine, session_scope
 from renderdesk.mcp_server import mcp
 from renderdesk.oauth_consent_state import OAuthConsentBindingMiddleware
 from renderdesk.oauth_provider import oauth_provider, sweep_expired_oauth_rows
-from renderdesk.rate_limit import RateLimitMiddleware
+from renderdesk.rate_limit import RateLimitMiddleware, sweep_stale_attempts
 from renderdesk.security_headers import SecurityHeadersMiddleware
-from renderdesk.session_auth import sweep_expired_sessions
+from renderdesk.session_auth import sweep_expired_sessions, sweep_stale_failed_logins
 from renderdesk.view import router as view_router
 
 _SWEEP_INTERVAL = timedelta(hours=1)
@@ -62,10 +62,15 @@ async def _sweep_loop() -> None:
     #  - OAuth rows: pending or issued authorization codes, expired refresh
     #    tokens, clients that never completed a token exchange.
     #  - Session rows: expired sessions nobody came back to present.
+    #  - The in-memory rate-limit/login-lockout counters, whose keys (client
+    #    IP, submitted email) are chosen by unauthenticated callers, so
+    #    they'd otherwise grow without bound for the process's lifetime.
     while True:
         await asyncio.sleep(_SWEEP_INTERVAL.total_seconds())
         await sweep_expired_oauth_rows()
         await sweep_expired_sessions()
+        sweep_stale_attempts()
+        sweep_stale_failed_logins()
 
 
 @asynccontextmanager

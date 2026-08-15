@@ -4,7 +4,16 @@ from sqlalchemy import select
 
 from renderdesk.db import session_scope
 from renderdesk.models import Session, User, utcnow
-from renderdesk.session_auth import create_session, sweep_expired_sessions
+from renderdesk.rate_limit import _attempts, is_rate_limited, record_attempt, sweep_stale_attempts
+from renderdesk.session_auth import (
+    _LOGIN_LOCKOUT_WINDOW,
+    _failed_logins,
+    create_session,
+    is_login_rate_limited,
+    record_failed_login,
+    sweep_expired_sessions,
+    sweep_stale_failed_logins,
+)
 
 from .conftest import make_user
 
@@ -52,3 +61,53 @@ async def test_sweep_is_a_no_op_when_nothing_has_expired():
 
     assert await sweep_expired_sessions() == 0
     assert await _session_count() == 1
+
+
+def test_sweep_drops_stale_rate_limit_entries_but_keeps_active_ones():
+    # Keys are client IPs picked by unauthenticated callers, so entries that
+    # are never revisited would otherwise accumulate for the process's life.
+    record_attempt("login_ip", "10.0.0.1")
+    _attempts[("login_ip", "10.0.0.2")] = [utcnow() - timedelta(hours=6)]
+    _attempts[("register", "10.0.0.3")] = [utcnow() - timedelta(minutes=30)]
+
+    removed = sweep_stale_attempts()
+
+    assert removed == 1
+    assert ("login_ip", "10.0.0.2") not in _attempts
+    # Recent attempt: still inside its window.
+    assert ("login_ip", "10.0.0.1") in _attempts
+    # 30 min old, but /register's window is an hour — must survive, which is
+    # why the sweep uses the longest configured window rather than one of them.
+    assert ("register", "10.0.0.3") in _attempts
+
+
+def test_rate_limit_sweep_never_drops_an_entry_still_blocking():
+    for _ in range(5):
+        record_attempt("register", "10.0.0.9")
+    assert is_rate_limited("register", "10.0.0.9", 5, timedelta(hours=1))
+
+    sweep_stale_attempts()
+
+    assert is_rate_limited("register", "10.0.0.9", 5, timedelta(hours=1))
+
+
+def test_sweep_drops_stale_failed_login_entries_but_keeps_active_ones():
+    # The key is the *submitted* email — chosen outright by the caller.
+    record_failed_login("recent@example.com")
+    _failed_logins["ancient@example.com"] = [utcnow() - _LOGIN_LOCKOUT_WINDOW - timedelta(minutes=1)]
+
+    removed = sweep_stale_failed_logins()
+
+    assert removed == 1
+    assert "ancient@example.com" not in _failed_logins
+    assert "recent@example.com" in _failed_logins
+
+
+def test_failed_login_sweep_never_clears_an_active_lockout():
+    for _ in range(5):
+        record_failed_login("locked@example.com")
+    assert is_login_rate_limited("locked@example.com")
+
+    sweep_stale_failed_logins()
+
+    assert is_login_rate_limited("locked@example.com")
