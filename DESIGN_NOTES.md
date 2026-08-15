@@ -418,16 +418,32 @@ implementation is on hold pending the Docker image size question below:
   to "same as React": SheetJS moved off the public npm registry after
   v0.18.6, so this has to come from `cdn.sheetjs.com`, not
   jsDelivr/unpkg).
-- **Tier 2 — Recharts, Lucide React — deferred, separate future
-  decision.** Neither has an official UMD build; Claude.ai gets them via
-  `esm.sh` bundling on demand. Vendoring them for real needs a new
-  esbuild-based local bundling step (dev-time only, run by a maintainer
-  when pinning a version, never at runtime, with `react`/`react-dom`
-  marked external so it hooks into the existing vendored globals) — a
-  standing process, not a one-off download, so it's a bigger addition than
-  Tier 1 and was deliberately not bundled into this pass. `shadcn/ui`
-  doesn't fit this model at all regardless of tier — it's copy-paste
-  source generated against Radix+Tailwind, not an installable package.
+- **Tier 2 — Recharts — deferred, separate future decision.** No official
+  UMD build; Claude.ai gets it via `esm.sh` bundling on demand. Vendoring
+  it for real needs a new esbuild-based local bundling step (dev-time
+  only, run by a maintainer when pinning a version, never at runtime, with
+  `react`/`react-dom` marked external so it hooks into the existing
+  vendored globals) — a standing process, not a one-off download, so it's
+  a bigger addition than Tier 1 and was deliberately not bundled into this
+  pass. `shadcn/ui` doesn't fit this model at all regardless of tier —
+  it's copy-paste source generated against Radix+Tailwind, not an
+  installable package.
+- **Icons — Bootstrap Icons, not Lucide React, and not gated on Tier 2.**
+  Lucide React has the same no-official-UMD problem as Recharts (would
+  need the same esbuild pipeline for no real gain), and Feather (the
+  closer sibling — Lucide is a community fork/continuation of it, so icon
+  names mostly carry over) does have an official UMD build (`feather.min.js`,
+  global `feather`, `feather.replace()` swaps `data-feather="camera"`
+  elements for inline SVG) but fights React's render cycle — it mutates
+  the DOM outside React, so a re-render can wipe icons it just inserted,
+  needing a `useEffect` re-invocation dance the model isn't trained to
+  reach for. Bootstrap Icons (MIT, ~2000 icons) sidesteps the whole
+  category of problem: it's CSS-class-based (`<i class="bi bi-camera">`),
+  not a JS import at all, so it needs no `requireShim` entry, no bundler
+  question, and works identically in `html` and `react` with the same
+  vendored CSS + font/SVG-sprite file — the same shape as KaTeX's already-
+  vendored fonts, not a new mechanism. Effectively independent of the
+  Tier 1/Tier 2 split above; could ship without waiting on either.
 
 Mechanism, as designed: `static/react-init.js`'s `requireShim` becomes a
 lookup table (specifier → global name) instead of a hardcoded if/else, so
