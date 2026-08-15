@@ -62,8 +62,11 @@ async def check_new_artifact_quota(session: AsyncSession, connection_id: str, by
 
 
 async def check_update_quota(
-    session: AsyncSession, connection_id: str, artifact_id: str, old_byte_size: int, new_byte_size: int
+    session: AsyncSession, connection_id: str, artifact_id: str, new_byte_size: int
 ) -> None:
+    # No old_byte_size parameter: the artifact's current size is excluded in
+    # SQL below (Artifact.id != artifact_id) rather than subtracted from the
+    # total, so the caller never needs to supply it.
     if new_byte_size > settings.max_bytes_per_artifact:
         raise QuotaExceededError(
             f"quota_exceeded: artifact is {new_byte_size} bytes, "

@@ -274,7 +274,7 @@ async def update_artifact(
             )
 
         new_format = _parse_format(format) if format is not None else artifact.format
-        await check_update_quota(session, connection_id, artifact_id, artifact.byte_size, byte_size)
+        await check_update_quota(session, connection_id, artifact_id, byte_size)
 
         artifact.content = content
         artifact.format = new_format
