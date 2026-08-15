@@ -97,6 +97,11 @@ class ArtifactVersion(Base):
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
+    # Nullable only because it was backfilled onto existing rows (migration
+    # 0010) — every write path sets it, so it's never NULL in practice.
+    # Stored rather than derived so listing an artifact's history doesn't
+    # have to load every version's content just to measure it.
+    byte_size: Mapped[int | None] = mapped_column(Integer, default=None)
     format: Mapped[ArtifactFormat] = mapped_column(Enum(ArtifactFormat))
     language: Mapped[str | None] = mapped_column(default=None)
     title: Mapped[str | None] = mapped_column(default=None)

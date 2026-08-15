@@ -36,6 +36,43 @@ async def test_list_versions_returns_all_in_descending_order_with_current_flagge
     assert history[0]["byte_size"] == len(b"v3")
 
 
+async def test_list_versions_reports_byte_size_for_multibyte_content():
+    # byte_size is stored per version (migration 0010) rather than measured
+    # from content at read time, so it has to agree with Artifact.byte_size's
+    # len(content.encode()) for content where bytes != characters — the case
+    # a character count would silently understate.
+    owner_id = await make_user(email="versions-multibyte@example.com")
+    connection_id = await make_connection(user_id=owner_id)
+    body = "emoji \U0001f600 and accents éàü"
+    assert len(body.encode()) != len(body)
+
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, body, "markdown", "Doc")
+    async with session_scope() as session:
+        await tools.update_artifact(
+            session, connection_id, published["artifact_id"], body * 2, base_version=1
+        )
+
+    async with session_scope() as session:
+        history = await versions.list_versions(session, owner_id, published["artifact_id"])
+
+    assert [v["byte_size"] for v in history] == [len((body * 2).encode()), len(body.encode())]
+
+
+async def test_every_version_write_path_records_byte_size():
+    # The column is nullable only because it was backfilled onto pre-existing
+    # rows; a write path that forgets to set it should fail here rather than
+    # silently render "None bytes" in the dashboard.
+    owner_id = await make_user(email="versions-bytesize@example.com")
+    connection_id = await make_connection(user_id=owner_id)
+    artifact_id = await _publish_and_update(owner_id, connection_id, updates=2)
+
+    async with session_scope() as session:
+        history = await versions.list_versions(session, owner_id, artifact_id)
+
+    assert all(v["byte_size"] is not None for v in history)
+
+
 async def test_list_versions_by_non_owner_raises():
     owner_id = await make_user(email="versions-owner2@example.com")
     connection_id = await make_connection(user_id=owner_id)

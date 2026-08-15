@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from mcp.server.auth.provider import construct_redirect_uri
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import defer
 
 from renderdesk import comments, shares, tools, versions, view
 from renderdesk.auth import generate_token, hash_token
@@ -372,6 +373,11 @@ async def dashboard_home(request: Request, user: User = Depends(require_current_
         rows = (
             await session.execute(
                 select(Artifact, Connection.label)
+                # This page renders titles and metadata only — without the
+                # defer, every listed artifact's full content is read off
+                # disk and materialized as a Python string to draw a table
+                # that never shows it.
+                .options(defer(Artifact.content))
                 .join(Connection, Artifact.connection_id == Connection.id)
                 .where(Connection.user_id == user.id)
                 .order_by(Artifact.updated_at.desc())

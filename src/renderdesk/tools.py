@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from renderdesk.config import settings
 from renderdesk.models import Artifact, ArtifactFormat, ArtifactShare, ArtifactVersion, Comment, Connection
@@ -58,9 +59,16 @@ async def get_owned_artifact_by_user(session: AsyncSession, user_id: str, artifa
     the caller is a human user (who may have several connections) rather
     than a single MCP connection. Deliberately stricter than comments.py's
     get_accessible_artifact — a share grants viewing/commenting, never the
-    right to delete someone else's artifact."""
+    right to delete someone else's artifact.
+
+    content is deferred: every caller here wants ownership plus metadata
+    (version, byte_size, connection_id) — none reads the body, and the
+    dashboard's historical viewer reads ArtifactVersion.content instead.
+    Deliberately not done in get_owned_artifact above, which backs
+    get_artifact(include_content=True)."""
     result = await session.execute(
         select(Artifact)
+        .options(defer(Artifact.content))
         .join(Connection, Artifact.connection_id == Connection.id)
         .where(Artifact.id == artifact_id, Connection.user_id == user_id)
     )
@@ -225,6 +233,7 @@ async def publish_artifact(
                 artifact_id=artifact_id,
                 version=1,
                 content=content,
+                byte_size=byte_size,
                 format=parsed_format,
                 language=language,
                 title=title,
@@ -281,6 +290,7 @@ async def update_artifact(
                 artifact_id=artifact_id,
                 version=artifact.version,
                 content=content,
+                byte_size=byte_size,
                 format=new_format,
                 language=artifact.language,
                 title=artifact.title,
@@ -320,6 +330,11 @@ async def list_artifacts(
 ) -> list[dict]:
     result = await session.execute(
         select(Artifact)
+        # This tool returns metadata only (get_artifact is the one that can
+        # return content, and only on request) — without the defer, a single
+        # call loads up to 200 artifacts' full content to build dicts that
+        # discard all of it.
+        .options(defer(Artifact.content))
         .where(Artifact.connection_id == connection_id)
         .order_by(Artifact.updated_at.desc())
         .limit(min(limit, 200))

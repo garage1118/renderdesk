@@ -16,20 +16,34 @@ class CannotDeleteCurrentVersionError(Exception):
 
 async def list_versions(session: AsyncSession, user_id: str, artifact_id: str) -> list[dict]:
     artifact = await get_owned_artifact_by_user(session, user_id, artifact_id)
+    # Explicit columns, not whole ArtifactVersion rows: version history is
+    # the one table no quota bounds (quotas.py only sums Artifact.byte_size),
+    # so selecting the entity here would load every superseded version's
+    # full content into memory just to render a list of sizes — on the very
+    # page whose purpose is pruning that history back down. byte_size is
+    # stored per version (migration 0010) precisely so this query never has
+    # to touch content.
     rows = (
         await session.execute(
-            select(ArtifactVersion)
+            select(
+                ArtifactVersion.version,
+                ArtifactVersion.title,
+                ArtifactVersion.format,
+                ArtifactVersion.language,
+                ArtifactVersion.byte_size,
+                ArtifactVersion.created_at,
+            )
             .where(ArtifactVersion.artifact_id == artifact_id)
             .order_by(ArtifactVersion.version.desc())
         )
-    ).scalars().all()
+    ).all()
     return [
         {
             "version": v.version,
             "title": v.title,
             "format": v.format.value,
             "language": v.language,
-            "byte_size": len(v.content.encode()),
+            "byte_size": v.byte_size,
             "created_at": v.created_at,
             "is_current": v.version == artifact.version,
         }

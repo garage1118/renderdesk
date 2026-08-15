@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from renderdesk.models import Artifact, ArtifactShare, Connection, User
 from renderdesk.tools import NotFoundError, get_owned_artifact, get_owned_artifact_by_user
@@ -113,6 +114,8 @@ async def list_shared_with_user(session: AsyncSession, user_id: str) -> list[dic
     rows = (
         await session.execute(
             select(Artifact, ArtifactShare.created_at, Connection.label)
+            # Metadata only below — see dashboard_home for the same reason.
+            .options(defer(Artifact.content))
             .join(ArtifactShare, ArtifactShare.artifact_id == Artifact.id)
             .join(Connection, Artifact.connection_id == Connection.id)
             .where(ArtifactShare.shared_with_user_id == user_id)
