@@ -471,3 +471,186 @@ async def test_react_artifact_source_cannot_break_out_of_script_tag(client):
     assert "<script>alert(1)</script>" not in resp.text  # would indicate a broken-out tag
 
 
+_REACT_OPTIONAL_LIBRARY_CASES = [
+    ('import * as THREE from "three";', "/static/vendor/three-0.160.0.min.js"),
+    ('import _ from "lodash";', "/static/vendor/lodash-4.18.1.min.js"),
+    ('import * as d3 from "d3";', "/static/vendor/d3-7.9.0.min.js"),
+    ('import * as math from "mathjs";', "/static/vendor/mathjs-15.2.0.js"),
+    ('import { Chart } from "chart.js";', "/static/vendor/chart.js-4.5.1.min.js"),
+    ('import "chart.js/auto";', "/static/vendor/chart.js-4.5.1.min.js"),
+    ('import * as Tone from "tone";', "/static/vendor/tone-15.1.22.js"),
+    ('import Papa from "papaparse";', "/static/vendor/papaparse-5.6.0.min.js"),
+    ('import * as XLSX from "xlsx";', "/static/vendor/xlsx-0.20.3.full.min.js"),
+    ('const _ = require("lodash");', "/static/vendor/lodash-4.18.1.min.js"),
+]
+
+
+@pytest.mark.parametrize(("import_line", "vendor_path"), _REACT_OPTIONAL_LIBRARY_CASES)
+async def test_react_artifact_import_loads_matching_vendored_library(client, import_line, vendor_path):
+    connection_id = await make_connection()
+    jsx = f'{import_line}\nexport default function App() {{ return <h1>Hi</h1>; }}\n'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert vendor_path in resp.text
+
+
+async def test_react_artifact_without_optional_imports_loads_no_optional_libraries(client):
+    connection_id = await make_connection()
+    jsx = "export default function App() { return <h1>Hi</h1>; }\n"
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    for _, vendor_path in _REACT_OPTIONAL_LIBRARY_CASES:
+        assert vendor_path not in resp.text
+
+
+async def test_react_artifact_bare_substring_does_not_load_library(client):
+    connection_id = await make_connection()
+    # "three" and "d3" appear here only as ordinary identifiers/prose, never
+    # as an import/require specifier — must not trigger loading.
+    jsx = (
+        "const three = 3;\n"
+        "// d3.js would be neat for this, but we're not using it\n"
+        "export default function App() { return <h1>{three}</h1>; }\n"
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "/static/vendor/three-0.160.0.min.js" not in resp.text
+    assert "/static/vendor/d3-7.9.0.min.js" not in resp.text
+
+
+async def test_react_artifact_with_bootstrap_icons_class_gets_stylesheet_and_relaxed_csp(client):
+    connection_id = await make_connection()
+    jsx = 'export default function App() { return <i className="bi bi-camera"></i>; }\n'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "/static/vendor/bootstrap-icons/bootstrap-icons-1.13.1.min.css" in resp.text
+    csp = resp.headers["content-security-policy"]
+    assert "style-src 'unsafe-inline' 'self'" in csp
+    assert "font-src data: 'self'" in csp
+    # script-src is already 'self'-scoped for every react response — icons
+    # shouldn't change that.
+    assert "script-src 'self' 'unsafe-eval'" in csp
+
+
+async def test_react_artifact_without_bootstrap_icons_class_is_unaffected(client):
+    connection_id = await make_connection()
+    jsx = "export default function App() { return <h1>Hi</h1>; }\n"
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "bootstrap-icons" not in resp.text
+    csp = resp.headers["content-security-policy"]
+    assert "style-src 'unsafe-inline';" in csp
+    assert "font-src data:;" in csp
+
+
+async def test_html_artifact_cdnjs_script_is_rewritten_to_vendored_equivalent(client):
+    connection_id = await make_connection()
+    html = (
+        "<html><body>"
+        '<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>'
+        "</body></html>"
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "cdnjs.cloudflare.com" not in resp.text
+    assert '<script src="/static/vendor/d3-7.9.0.min.js"></script>' in resp.text
+    assert 'script-src \'unsafe-inline\' \'unsafe-eval\' \'self\';' in resp.headers["content-security-policy"]
+
+
+async def test_html_artifact_cdnjs_rewrite_ignores_version_in_url(client):
+    connection_id = await make_connection()
+    # A different version number in the URL than the one renderdesk vendors
+    # still matches — the rewrite keys on the library slug, not the version.
+    html = '<script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js"></script>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert '<script src="/static/vendor/lodash-4.18.1.min.js"></script>' in resp.text
+
+
+async def test_html_artifact_unknown_cdnjs_library_is_left_untouched(client):
+    connection_id = await make_connection()
+    html = '<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert resp.text == html  # byte-for-byte untouched — jquery isn't vendored
+    csp = resp.headers["content-security-policy"]
+    assert "script-src 'unsafe-inline' 'unsafe-eval';" in csp  # not widened
+
+
+async def test_html_artifact_with_mermaid_and_cdnjs_rewrite_gets_single_csp_variant(client):
+    connection_id = await make_connection()
+    html = (
+        '<pre class="mermaid">graph TD;A-->B;</pre>'
+        '<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>'
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    csp = resp.headers["content-security-policy"]
+    # script-src gains exactly one 'self' (mermaid + the cdnjs rewrite both
+    # firing shouldn't add it twice) — the base CSP's unrelated
+    # frame-ancestors 'self' accounts for the other occurrence.
+    assert 'script-src \'unsafe-inline\' \'unsafe-eval\' \'self\';' in csp
+    assert csp.count("'self'") == 2
+
+
+async def test_html_artifact_with_bootstrap_icons_class_gets_stylesheet_and_relaxed_csp(client):
+    connection_id = await make_connection()
+    html = '<i class="bi bi-camera"></i>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "/static/vendor/bootstrap-icons/bootstrap-icons-1.13.1.min.css" in resp.text
+    csp = resp.headers["content-security-policy"]
+    assert "style-src 'unsafe-inline' 'self'" in csp
+    assert "font-src data: 'self'" in csp
+    assert "script-src 'unsafe-inline' 'unsafe-eval';" in csp  # icons alone don't touch script-src
+
+
+@pytest.mark.parametrize(
+    "vendor_path",
+    [
+        "/static/vendor/three-0.160.0.min.js",
+        "/static/vendor/lodash-4.18.1.min.js",
+        "/static/vendor/d3-7.9.0.min.js",
+        "/static/vendor/mathjs-15.2.0.js",
+        "/static/vendor/chart.js-4.5.1.min.js",
+        "/static/vendor/tone-15.1.22.js",
+        "/static/vendor/papaparse-5.6.0.min.js",
+        "/static/vendor/xlsx-0.20.3.full.min.js",
+        "/static/vendor/bootstrap-icons/bootstrap-icons-1.13.1.min.css",
+        "/static/vendor/bootstrap-icons/fonts/bootstrap-icons.woff2",
+    ],
+)
+async def test_vendored_optional_library_file_exists(client, vendor_path):
+    resp = await client.get(vendor_path)
+    assert resp.status_code == 200
+

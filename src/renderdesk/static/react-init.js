@@ -1,13 +1,35 @@
 // Runs a React artifact with no bundler: the JSX/TSX source sits inertly in
 // a type="application/json" script tag (view.py JSON-escapes it so a literal
 // "</script" inside the source can't end the tag early), Babel standalone
-// transpiles it in-browser, and a tiny CommonJS shim resolves only "react"/
-// "react-dom" to the vendored globals below — anything else the artifact
+// transpiles it in-browser, and a tiny CommonJS shim resolves each entry in
+// LIBRARY_GLOBALS below to its vendored global — anything else the artifact
 // imports fails with a readable error instead of a silent blank page, since
-// there's no bundler here to fetch a real npm package.
+// there's no bundler here to fetch a real npm package. view.py's
+// _optional_react_assets decides, per artifact, which of these <script>
+// tags actually get loaded (based on which specifiers the source imports),
+// so this table can safely list more specifiers than any given artifact
+// has scripts for — the LIBRARY_GLOBALS[name] === undefined check below is
+// what turns "the script wasn't loaded" into the same readable error as
+// "the specifier isn't supported at all", rather than a raw
+// ReferenceError/TypeError from deeper in the artifact's own code.
 (function () {
     var source = JSON.parse(document.getElementById("artifact-source").textContent);
     var root = document.getElementById("root");
+
+    var LIBRARY_GLOBALS = {
+        react: "React",
+        "react-dom": "ReactDOM",
+        "react-dom/client": "ReactDOM",
+        three: "THREE",
+        lodash: "_",
+        d3: "d3",
+        mathjs: "math",
+        "chart.js": "Chart",
+        "chart.js/auto": "Chart",
+        tone: "Tone",
+        papaparse: "Papa",
+        xlsx: "XLSX",
+    };
 
     function showError(err) {
         var pre = document.createElement("pre");
@@ -20,12 +42,15 @@
     }
 
     function requireShim(name) {
-        if (name === "react") return React;
-        if (name === "react-dom" || name === "react-dom/client") return ReactDOM;
-        throw new Error(
-            'import "' + name + '" is not available. renderdesk\'s React artifacts only have ' +
-            "react and react-dom in scope — no other packages can be imported."
-        );
+        var globalName = LIBRARY_GLOBALS[name];
+        var value = globalName !== undefined ? window[globalName] : undefined;
+        if (value === undefined) {
+            throw new Error(
+                'import "' + name + '" is not available. renderdesk\'s React artifacts only have ' +
+                "the following in scope: " + Object.keys(LIBRARY_GLOBALS).join(", ") + "."
+            );
+        }
+        return value;
     }
 
     try {

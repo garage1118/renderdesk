@@ -42,12 +42,23 @@ _HTML_CSP = (
     "object-src 'none'; "
     "frame-ancestors 'self'"
 )
-# 'self' (same-origin — our own vendored mermaid.min.js, never an external
-# CDN) is only added when the artifact actually contains a mermaid marker;
-# see _inject_mermaid_if_present.
-_HTML_CSP_WITH_MERMAID = _HTML_CSP.replace(
-    "script-src 'unsafe-inline' 'unsafe-eval';", "script-src 'unsafe-inline' 'unsafe-eval' 'self';"
-)
+# 'self' (same-origin — our own vendored files, never an external CDN) is
+# only added to the specific directive an artifact actually needs it for,
+# and only when detected: script-src for a mermaid diagram or a rewritten
+# cdnjs library reference (_inject_mermaid_if_present,
+# _rewrite_cdn_library_urls), style-src/font-src for Bootstrap Icons'
+# vendored CSS + webfont (_inject_bootstrap_icons_if_present). Kept as two
+# independent axes rather than one flat "has extras" flag, since a
+# same-origin script and a same-origin stylesheet+font are different CSP
+# directives — a diagram-only artifact shouldn't get font-src widened, and
+# an icons-only artifact shouldn't get script-src widened.
+def _with_same_origin_scripts(csp: str) -> str:
+    return csp.replace("script-src 'unsafe-inline' 'unsafe-eval';", "script-src 'unsafe-inline' 'unsafe-eval' 'self';")
+
+
+def _with_same_origin_styles_and_fonts(csp: str) -> str:
+    csp = csp.replace("style-src 'unsafe-inline';", "style-src 'unsafe-inline' 'self';")
+    return csp.replace("font-src data:;", "font-src data: 'self';")
 
 _MERMAID_VERSION = "11.16.0"
 _MERMAID_ASSETS = (
@@ -72,6 +83,89 @@ _REACT_ASSETS = (
     f'<script src="/static/vendor/babel-standalone-{_BABEL_STANDALONE_VERSION}.min.js"></script>'
     '<script src="/static/react-init.js"></script>'
 )
+
+# Optional libraries `react` artifacts may import beyond react/react-dom,
+# and `html` artifacts may reference via the cdnjs rewrite below. Each has
+# an official standalone/UMD browser build, vendored the same
+# download-and-pin way as react/mermaid above — no bundler. Two exceptions
+# to "download the current release": SheetJS moved off npm/jsDelivr after
+# v0.18.6 (this comes from cdn.sheetjs.com instead), and Three.js dropped
+# its classic global-exposing build after r160 — later releases only ship
+# ES-module-only builds, so this is pinned at r160 deliberately, not
+# because it's the latest. mathjs and Tone.js don't publish a minified
+# browser build at all (only an unminified UMD bundle) — vendored as-is.
+_THREE_VERSION = "0.160.0"
+_LODASH_VERSION = "4.18.1"
+_D3_VERSION = "7.9.0"
+_MATHJS_VERSION = "15.2.0"
+_CHARTJS_VERSION = "4.5.1"
+_TONE_VERSION = "15.1.22"
+_PAPAPARSE_VERSION = "5.6.0"
+_XLSX_VERSION = "0.20.3"
+
+
+def _specifier_pattern(*specifiers: str) -> re.Pattern[str]:
+    alternation = "|".join(re.escape(s) for s in specifiers)
+    return re.compile(rf"""(?:from\s+|import\s+|require\(\s*)['"](?:{alternation})['"]""")
+
+
+# (import-specifier pattern, <script> tag to emit if that pattern matches
+# an artifact's source). `chart.js` and `chart.js/auto` both resolve to
+# the same vendored file: the UMD build already auto-registers every
+# controller/element/plugin, so there's no separate "auto" asset to pick.
+_REACT_OPTIONAL_LIBRARIES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (_specifier_pattern("three"), f'<script src="/static/vendor/three-{_THREE_VERSION}.min.js"></script>'),
+    (_specifier_pattern("lodash"), f'<script src="/static/vendor/lodash-{_LODASH_VERSION}.min.js"></script>'),
+    (_specifier_pattern("d3"), f'<script src="/static/vendor/d3-{_D3_VERSION}.min.js"></script>'),
+    (_specifier_pattern("mathjs"), f'<script src="/static/vendor/mathjs-{_MATHJS_VERSION}.js"></script>'),
+    (
+        _specifier_pattern("chart.js", "chart.js/auto"),
+        f'<script src="/static/vendor/chart.js-{_CHARTJS_VERSION}.min.js"></script>',
+    ),
+    (_specifier_pattern("tone"), f'<script src="/static/vendor/tone-{_TONE_VERSION}.js"></script>'),
+    (_specifier_pattern("papaparse"), f'<script src="/static/vendor/papaparse-{_PAPAPARSE_VERSION}.min.js"></script>'),
+    (_specifier_pattern("xlsx"), f'<script src="/static/vendor/xlsx-{_XLSX_VERSION}.full.min.js"></script>'),
+)
+
+
+def _optional_react_assets(source: str) -> str:
+    """Scan a React artifact's JSX/TSX source for imports of the optional
+    vendored libraries above and return only the <script> tags actually
+    needed — loading all of them unconditionally on every render would be
+    real, avoidable weight (Three.js and xlsx alone are hundreds of KB
+    each). This is a regex heuristic over raw source, not a real JS parser
+    (same rigor as _MERMAID_CLASS_RE below): it can miss a dynamically
+    aliased import, but react-init.js's requireShim has its own
+    undefined-check backstop for exactly that gap, so a miss here fails
+    as a readable in-page error rather than a silent blank page."""
+    return "".join(tag for pattern, tag in _REACT_OPTIONAL_LIBRARIES if pattern.search(source))
+
+
+_BOOTSTRAP_ICONS_VERSION = "1.13.1"
+_BOOTSTRAP_ICONS_ASSET = (
+    f'<link rel="stylesheet" href="/static/vendor/bootstrap-icons/'
+    f'bootstrap-icons-{_BOOTSTRAP_ICONS_VERSION}.min.css">'
+)
+# Bootstrap Icons isn't a JS import at all — just a CSS class
+# (`bi bi-camera`) backed by a vendored webfont — so unlike the libraries
+# above it needs no requireShim entry and applies identically to `html`
+# and `react`. Matches on any `bi-<name>` token inside a class/className
+# attribute; a plain-text false positive (e.g. a sentence containing
+# "bi-weekly" outside any class attribute) can't match since the token has
+# to sit inside quotes following class= or className=.
+_BOOTSTRAP_ICONS_CLASS_RE = re.compile(
+    r"""class(?:Name)?\s*=\s*["'][^"']*\bbi-[a-z0-9-]+\b[^"']*["']""", re.IGNORECASE
+)
+
+
+def _inject_bootstrap_icons_if_present(content: str) -> tuple[str, bool]:
+    if not _BOOTSTRAP_ICONS_CLASS_RE.search(content):
+        return content, False
+    match = _BODY_CLOSE_RE.search(content)
+    if match:
+        return content[: match.start()] + _BOOTSTRAP_ICONS_ASSET + content[match.start() :], True
+    return content + _BOOTSTRAP_ICONS_ASSET, True
+
 
 _KATEX_ASSETS = (
     '<link rel="stylesheet" href="/static/vendor/katex/katex.min.css">'
@@ -282,7 +376,53 @@ def _inject_mermaid_if_present(content: str) -> tuple[str, bool]:
     return content + _MERMAID_ASSETS, True
 
 
-def _build_react_raw_html(artifact: Artifact) -> str:
+_CDNJS_SCRIPT_RE = re.compile(
+    r"""<script\b[^>]*\bsrc\s*=\s*["']https://cdnjs\.cloudflare\.com/ajax/libs/"""
+    r"""(?P<slug>[^/"']+)/[^/"']+/[^"']+["'][^>]*>\s*</script>""",
+    re.IGNORECASE,
+)
+
+# cdnjs "library slug" (the path segment right after /ajax/libs/, distinct
+# from the npm package name — e.g. lodash's slug is "lodash.js", not
+# "lodash") to the same vendored asset _REACT_OPTIONAL_LIBRARIES emits.
+# Confirmed against cdnjs's own listing at implementation time, not
+# guessed — cdnjs slugs don't reliably match npm package names.
+_CDNJS_SLUG_TO_ASSET = {
+    "three.js": f'<script src="/static/vendor/three-{_THREE_VERSION}.min.js"></script>',
+    "lodash.js": f'<script src="/static/vendor/lodash-{_LODASH_VERSION}.min.js"></script>',
+    "d3": f'<script src="/static/vendor/d3-{_D3_VERSION}.min.js"></script>',
+    "mathjs": f'<script src="/static/vendor/mathjs-{_MATHJS_VERSION}.js"></script>',
+    "Chart.js": f'<script src="/static/vendor/chart.js-{_CHARTJS_VERSION}.min.js"></script>',
+    "tone": f'<script src="/static/vendor/tone-{_TONE_VERSION}.js"></script>',
+    "PapaParse": f'<script src="/static/vendor/papaparse-{_PAPAPARSE_VERSION}.min.js"></script>',
+    "xlsx": f'<script src="/static/vendor/xlsx-{_XLSX_VERSION}.full.min.js"></script>',
+}
+
+
+def _rewrite_cdn_library_urls(content: str) -> tuple[str, bool]:
+    """The other deliberate exception to "html artifacts never reach an
+    external host": a <script src> pointing at the cdnjs.cloudflare.com
+    allowlist Claude's own artifact sandbox uses (the URL pattern a model
+    is already trained to reach for) gets rewritten in place to the
+    same-origin vendored equivalent, rather than silently failing under
+    this app's CSP. Any integrity/crossorigin attributes on the original
+    tag are dropped along with it — they'd be meaningless, or actively
+    wrong, once pointed at a different file. Slugs not in
+    _CDNJS_SLUG_TO_ASSET are left untouched."""
+    rewritten = False
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal rewritten
+        asset = _CDNJS_SLUG_TO_ASSET.get(match.group("slug"))
+        if asset is None:
+            return match.group(0)
+        rewritten = True
+        return asset
+
+    return _CDNJS_SCRIPT_RE.sub(_replace, content), rewritten
+
+
+def _build_react_raw_html(artifact: Artifact) -> tuple[str, bool]:
     """Wrap a React artifact's JSX/TSX source (just the module body — no
     bundler, so no build step turns it into a plain <script>) for
     react-init.js to transpile and mount client-side. The source is embedded
@@ -294,15 +434,26 @@ def _build_react_raw_html(artifact: Artifact) -> str:
     sequence in the source has to be escaped or it would truncate the tag
     early — the json.dumps().replace() below is the standard fix for
     embedding arbitrary text in an inline script (same technique frameworks
-    use for SSR hydration data)."""
+    use for SSR hydration data). Also emits <script> tags for any optional
+    vendored library the source imports (_optional_react_assets) and a
+    Bootstrap Icons <link> if a bi-* class is used — the returned bool
+    tells the caller whether the response's CSP needs style-src/font-src
+    widened for the latter (script-src is already 'self'-scoped for every
+    react response, so the vendored libraries' <script> tags never need a
+    CSP change of their own)."""
     title = html_escape.escape(artifact.title or "Untitled")
     source_json = json.dumps(artifact.content).replace("</", "<\\/")
-    return (
+    has_bootstrap_icons = bool(_BOOTSTRAP_ICONS_CLASS_RE.search(artifact.content))
+    icons_asset = _BOOTSTRAP_ICONS_ASSET if has_bootstrap_icons else ""
+    content = (
         f"<!doctype html><title>{title}</title><style>html,body{{margin:0}}</style>"
+        f"{icons_asset}"
         '<div id="root"></div>'
         f'<script id="artifact-source" type="application/json">{source_json}</script>'
         f"{_REACT_ASSETS}"
+        f"{_optional_react_assets(artifact.content)}"
     )
+    return content, has_bootstrap_icons
 
 
 async def _load_artifact(artifact_id: str) -> Artifact:
@@ -402,12 +553,19 @@ async def view_artifact_raw(artifact_id: str) -> Response:
         )
 
     if artifact.format == ArtifactFormat.react:
-        content = _build_react_raw_html(artifact)
-        return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": _REACT_CSP})
+        content, has_bootstrap_icons = _build_react_raw_html(artifact)
+        csp = _with_same_origin_styles_and_fonts(_REACT_CSP) if has_bootstrap_icons else _REACT_CSP
+        return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": csp})
 
     if artifact.format != ArtifactFormat.html:
         raise HTTPException(status_code=404)
 
     content, has_mermaid = _inject_mermaid_if_present(artifact.content)
-    csp = _HTML_CSP_WITH_MERMAID if has_mermaid else _HTML_CSP
+    content, has_cdn_rewrite = _rewrite_cdn_library_urls(content)
+    content, has_bootstrap_icons = _inject_bootstrap_icons_if_present(content)
+    csp = _HTML_CSP
+    if has_mermaid or has_cdn_rewrite:
+        csp = _with_same_origin_scripts(csp)
+    if has_bootstrap_icons:
+        csp = _with_same_origin_styles_and_fonts(csp)
     return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": csp})
