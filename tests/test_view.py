@@ -654,3 +654,69 @@ async def test_vendored_optional_library_file_exists(client, vendor_path):
     resp = await client.get(vendor_path)
     assert resp.status_code == 200
 
+
+async def test_mermaid_class_inside_html_comment_does_not_trigger_injection(client):
+    connection_id = await make_connection()
+    # Regression test: an artifact merely *documenting* the convention in a
+    # comment — e.g. explaining why it deliberately isn't using a feature —
+    # previously matched the same way a real `class="mermaid"` element
+    # would, loading mermaid.min.js (~3.5MB) and widening the CSP for
+    # nothing. Found via a real production artifact that hit exactly this.
+    html = '<!-- note: a class="mermaid" element would draw a diagram here --><body></body>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert resp.text == html  # byte-for-byte untouched, no runtime spliced in
+    assert "mermaid-init.js" not in resp.text
+    csp = resp.headers["content-security-policy"]
+    assert "script-src 'unsafe-inline' 'unsafe-eval';" in csp  # not widened
+
+
+async def test_bootstrap_icons_class_inside_html_comment_does_not_trigger_injection(client):
+    connection_id = await make_connection()
+    html = '<!-- example: class="bi bi-camera" renders a camera icon --><body></body>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "bootstrap-icons" not in resp.text
+    csp = resp.headers["content-security-policy"]
+    assert "style-src 'unsafe-inline';" in csp  # not widened
+    assert "font-src data:;" in csp
+
+
+async def test_cdnjs_script_inside_html_comment_is_not_rewritten(client):
+    connection_id = await make_connection()
+    html = (
+        "<!-- e.g. "
+        '<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>'
+        " would load D3 --><body></body>"
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert resp.text == html  # byte-for-byte untouched, including inside the comment
+    csp = resp.headers["content-security-policy"]
+    assert "script-src 'unsafe-inline' 'unsafe-eval';" in csp  # not widened
+
+
+async def test_mermaid_class_outside_comment_still_triggers_after_unrelated_comment(client):
+    connection_id = await make_connection()
+    # A comment mentioning the feature shouldn't suppress detection of a
+    # *real* element elsewhere in the same artifact.
+    html = (
+        '<!-- class="mermaid" is how you\'d draw a diagram -->'
+        '<pre class="mermaid">graph TD;A-->B;</pre>'
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "mermaid-init.js" in resp.text
+

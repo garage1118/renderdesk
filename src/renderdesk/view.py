@@ -157,9 +157,27 @@ _BOOTSTRAP_ICONS_CLASS_RE = re.compile(
     r"""class(?:Name)?\s*=\s*["'][^"']*\bbi-[a-z0-9-]+\b[^"']*["']""", re.IGNORECASE
 )
 
+# None of the detection regexes below are HTML-comment-aware — they scan
+# raw text, so a false match can hide inside an <!-- ... --> comment, not
+# just a real element/attribute. That's not a security issue (a false
+# match only ever adds 'self' to script-src, and connect-src stays 'none'
+# regardless — no external network reach is gained), but it's a real
+# correctness/cost one: an artifact that merely *mentions* one of these
+# features in an explanatory comment — an entirely ordinary thing for an
+# LLM-authored artifact to do, documenting its own use of the feature —
+# would otherwise trigger it for real. _inject_mermaid_if_present is the
+# most expensive case: mermaid.min.js is ~3.5MB, larger than any single
+# vendored library in _CDNJS_SLUG_TO_ASSET. Stripping comments before
+# detection (never before splicing/substitution, which still operates on
+# the real content) is a cheap, proportionate fix — full HTML-comment
+# awareness via a real parser would be a bigger change than this class of
+# heuristic detection warrants, consistent with _MERMAID_CLASS_RE's
+# existing regex-not-a-parser approach.
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
 
 def _inject_bootstrap_icons_if_present(content: str) -> tuple[str, bool]:
-    if not _BOOTSTRAP_ICONS_CLASS_RE.search(content):
+    if not _BOOTSTRAP_ICONS_CLASS_RE.search(_HTML_COMMENT_RE.sub("", content)):
         return content, False
     match = _BODY_CLOSE_RE.search(content)
     if match:
@@ -366,8 +384,10 @@ def _inject_mermaid_if_present(content: str) -> tuple[str, bool]:
     'mermaid' class (e.g. <pre class="mermaid">, the same convention Claude's
     own artifact viewer recognizes) gets the vendored mermaid runtime spliced
     in automatically, so publishers don't have to inline the whole library
-    themselves just to draw a diagram."""
-    if not _MERMAID_CLASS_RE.search(content):
+    themselves just to draw a diagram. Detection ignores HTML comments
+    (see _HTML_COMMENT_RE) — the splice below still targets the real,
+    unstripped content."""
+    if not _MERMAID_CLASS_RE.search(_HTML_COMMENT_RE.sub("", content)):
         return content, False
 
     match = _BODY_CLOSE_RE.search(content)
@@ -408,11 +428,21 @@ def _rewrite_cdn_library_urls(content: str) -> tuple[str, bool]:
     this app's CSP. Any integrity/crossorigin attributes on the original
     tag are dropped along with it — they'd be meaningless, or actively
     wrong, once pointed at a different file. Slugs not in
-    _CDNJS_SLUG_TO_ASSET are left untouched."""
+    _CDNJS_SLUG_TO_ASSET are left untouched — as is any match sitting
+    inside an HTML comment (see _HTML_COMMENT_RE): rewriting it would
+    still work (a commented-out <script> stays inert either way), but
+    skipping it means an artifact that merely *mentions* a cdnjs URL in
+    an explanatory comment doesn't needlessly widen the CSP."""
+    comment_spans = [m.span() for m in _HTML_COMMENT_RE.finditer(content)]
     rewritten = False
+
+    def _in_comment(pos: int) -> bool:
+        return any(start <= pos < end for start, end in comment_spans)
 
     def _replace(match: re.Match[str]) -> str:
         nonlocal rewritten
+        if _in_comment(match.start()):
+            return match.group(0)
         asset = _CDNJS_SLUG_TO_ASSET.get(match.group("slug"))
         if asset is None:
             return match.group(0)
