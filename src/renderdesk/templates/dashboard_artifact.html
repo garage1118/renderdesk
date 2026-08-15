@@ -75,7 +75,8 @@
       <div class="thread {{ 'is-resolved' if thread.resolved else '' }}">
         {% for c in thread.comments %}
         <div class="comment">
-          <span class="avatar {{ 'role-agent' if c.author == 'agent' else '' }}">{{ c.author[0]|upper }}</span>
+          <span class="avatar {{ 'role-agent' if c.author_kind == 'agent' else '' }}"
+                title="{{ c.author_kind }}">{{ c.author[0]|upper }}</span>
           <div class="comment-body">
             <div class="comment-meta">{{ c.author }} &middot; {{ c.created_at }}</div>
             <div>{{ c.body }}</div>

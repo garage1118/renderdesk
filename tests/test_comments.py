@@ -5,7 +5,7 @@ from renderdesk import comments, tools
 from renderdesk.db import session_scope
 from renderdesk.models import Connection, User
 
-from .conftest import make_connection
+from .conftest import make_connection, make_user
 
 
 async def _publish(connection_id: str) -> str:
@@ -122,4 +122,54 @@ async def test_resolve_hides_thread_unless_included():
         resolved = await comments.list_comments(session, connection_id, artifact_id, include_resolved=True)
     assert len(resolved) == 1
     assert resolved[0]["resolved"] is True
-    assert resolved[0]["comments"][0]["author"] == "human"
+    assert resolved[0]["comments"][0]["author"] == user.email
+    assert resolved[0]["comments"][0]["author_kind"] == "human"
+
+
+async def test_thread_distinguishes_each_author_not_just_human_vs_agent():
+    # The case the per-connection identity model exists for: two different
+    # agent connections plus a human in one thread. Before authorship was
+    # surfaced these were three comments labelled "agent"/"agent"/"human",
+    # with no way for a reader — or an agent reading its own thread — to
+    # tell which agent said what.
+    owner = await make_user(email="threads@example.com")
+    first = await make_connection(label="claude-code", user_id=owner)
+    second = await make_connection(label="vscode", user_id=owner)
+    artifact_id = await _publish(first)
+    user = await _user_for(first)
+
+    async with session_scope() as session:
+        root = await comments.create_comment(session, user, artifact_id, "please review")
+    async with session_scope() as session:
+        await comments.reply_to_comment(session, first, root["thread_id"], "looking")
+    # The second connection can only reply to a thread on an artifact it
+    # owns, so hand it the artifact first.
+    async with session_scope() as session:
+        await tools.reassign_artifact_connection(session, owner, artifact_id, second)
+    async with session_scope() as session:
+        await comments.reply_to_comment(session, second, root["thread_id"], "done")
+
+    async with session_scope() as session:
+        threads = await comments.list_comments(session, second, artifact_id)
+
+    assert [(c["author"], c["author_kind"]) for c in threads[0]["comments"]] == [
+        ("threads@example.com", "human"),
+        ("claude-code", "agent"),
+        ("vscode", "agent"),
+    ]
+
+
+async def test_unlabelled_connection_falls_back_to_a_stable_non_empty_name():
+    # label is nullable, and author[0] is rendered as an avatar initial in
+    # the dashboard — an empty or None author would break that page.
+    connection_id = await make_connection(label=None)
+    artifact_id = await _publish(connection_id)
+    user = await _user_for(connection_id)
+
+    async with session_scope() as session:
+        root = await comments.create_comment(session, user, artifact_id, "please review")
+    async with session_scope() as session:
+        reply = await comments.reply_to_comment(session, connection_id, root["thread_id"], "ok")
+
+    assert reply["author"] == f"connection {connection_id[:8]}"
+    assert reply["author_kind"] == "agent"

@@ -192,16 +192,26 @@ async def test_comment_posted_via_dashboard_is_visible_to_mcp_and_vice_versa(cli
     assert threads[0]["comments"][0] == {
         "comment_id": threads[0]["comments"][0]["comment_id"],
         "body": "please fix the title",
-        "author": "human",
+        # The human who posted it from the dashboard, by email — not a bare
+        # "human" tag (see comments._serialize_comment).
+        "author": "dave@example.com",
+        "author_kind": "human",
         "created_at": threads[0]["comments"][0]["created_at"],
     }
     thread_id = threads[0]["thread_id"]
 
     async with session_scope() as session:
-        await comments.reply_to_comment(session, connection_id, thread_id, "fixed!")
+        reply = await comments.reply_to_comment(session, connection_id, thread_id, "fixed!")
+
+    # The agent's reply is attributed to the connection that wrote it, by
+    # label — so a thread with several participants stays distinguishable.
+    assert reply["author"] == "test"
+    assert reply["author_kind"] == "agent"
 
     detail_resp = await client.get(f"/dashboard/a/{artifact_id}")
     assert "fixed!" in detail_resp.text
+    # Both identities reach the rendered page, not two copies of "human".
+    assert "dave@example.com" in detail_resp.text
 
 
 async def test_shared_artifact_shows_up_for_recipient_but_not_via_their_mcp_connection(client):
