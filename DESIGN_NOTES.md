@@ -448,6 +448,15 @@ CSP handling stays a two-way switch (`_HTML_CSP` vs. one
 same-origin-scripts variant), OR'd across however many of {mermaid, cdnjs
 rewrite} fired, never a per-library CSP addition.
 
+Discoverability rides the existing self-describing MCP surfaces, no new
+tool/resource needed: `publish_artifact`'s tool docstring (`mcp_server.py`,
+returned in `tools/list`, so every client sees it) and the
+`publish_artifact` MCP prompt (richer guidance, reached only by clients
+implementing the prompts capability) both currently state the
+`react`/`react-dom`-only and no-CDN-for-`html` restrictions explicitly —
+both need rewriting to enumerate the 8 once shipped, or agents have no way
+to learn the restriction lifted.
+
 **Open blocker: Docker image size.** The deployed image is ~90MB on
 Docker Hub today. Eight new vendored minified libraries (Three.js and
 SheetJS's `xlsx.full.min.js` are the heaviest, each several hundred KB;
