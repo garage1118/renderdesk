@@ -151,7 +151,12 @@ before touching any of these or proposing multi-worker/Postgres support.
   existence.
 - Migrations that only add nullable columns/tables need no special rollout
   handling; anything that changes an existing constraint or backfills data
-  needs a rollout note (see `DESIGN_NOTES.md` for past examples) since this
-  project has exactly one live deployment to coordinate with.
+  needs a rollout note (see `DESIGN_NOTES.md` for past examples). The image
+  is published publicly, so the installed base is unbounded and can't be
+  inspected or fixed by hand: a migration has to carry every installation
+  from whatever revision it's on to head unattended, on first boot. Never
+  design one around a manual follow-up step, and never assume a host has
+  seen a particular earlier release — the `:latest` channel skips RC-only
+  releases entirely.
 - One commit per distinct fix/issue when doing a multi-issue pass (review
   triage, test fixes), not one combined commit — matches existing history.
