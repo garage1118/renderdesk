@@ -60,6 +60,26 @@ def _with_same_origin_styles_and_fonts(csp: str) -> str:
     csp = csp.replace("style-src 'unsafe-inline';", "style-src 'unsafe-inline' 'self';")
     return csp.replace("font-src data:;", "font-src data: 'self';")
 
+def _artifact_headers(csp: str) -> dict[str, str]:
+    """Response headers for an artifact page. Every CSP built in this module
+    ends in `frame-ancestors 'self'`, so each response has to carry a
+    matching X-Frame-Options — otherwise SecurityHeadersMiddleware stamps on
+    its dashboard-oriented default of DENY, which says the opposite.
+
+    That contradiction is not academic: view_artifact serves html/react by
+    embedding /a/{id}/raw in a same-origin iframe, which DENY forbids. It
+    renders today only because browsers ignore X-Frame-Options entirely when
+    a CSP with frame-ancestors is present (CSP Level 2 §3.1) — i.e. the
+    feature works on a spec fallback rather than on what we actually asked
+    for. Stating SAMEORIGIN makes the two headers agree.
+
+    Not applied to the text/plain and text/csv responses in
+    view_artifact_raw: nothing frames those, so the middleware's stricter
+    DENY is the right answer for them.
+    """
+    return {"Content-Security-Policy": csp, "X-Frame-Options": "SAMEORIGIN"}
+
+
 _MERMAID_VERSION = "11.16.0"
 _MERMAID_ASSETS = (
     f'<script src="/static/vendor/mermaid-{_MERMAID_VERSION}.min.js"></script>'
@@ -519,7 +539,7 @@ async def view_artifact(artifact_id: str) -> Response:
         assets = _THEME_SCRIPT + (_MERMAID_ASSETS if has_mermaid else "") + (_KATEX_ASSETS if has_math else "")
         csp = _page_csp(has_math)
         body = f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{style}{assets}<body>{rendered}</body>"
-        return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": csp})
+        return Response(content=body, media_type="text/html", headers=_artifact_headers(csp))
 
     if artifact.format == ArtifactFormat.code:
         # Read-only, syntax-highlighted, never executed — distinct from
@@ -531,7 +551,7 @@ async def view_artifact(artifact_id: str) -> Response:
             f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{style}{_THEME_SCRIPT}"
             f"<body>{code_html}</body>"
         )
-        return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
+        return Response(content=body, media_type="text/html", headers=_artifact_headers(_PAGE_CSP))
 
     if artifact.format == ArtifactFormat.csv:
         # Read-only table view, never executed.
@@ -542,7 +562,7 @@ async def view_artifact(artifact_id: str) -> Response:
             f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{_CSV_CSS}{_THEME_SCRIPT}"
             f"<body>{table_html}{_CSV_ASSETS}</body>"
         )
-        return Response(content=body, media_type="text/html", headers={"Content-Security-Policy": _PAGE_CSP})
+        return Response(content=body, media_type="text/html", headers=_artifact_headers(_PAGE_CSP))
 
     title = html_escape.escape(artifact.title or "Untitled")
     safe_id = html_escape.escape(artifact_id)
@@ -555,7 +575,7 @@ async def view_artifact(artifact_id: str) -> Response:
     # iframe above — the markdown/code branches above never embed an
     # iframe, so _PAGE_CSP itself stays as tight as possible for them.
     csp = _PAGE_CSP + "; frame-src 'self'"
-    return Response(content=page, media_type="text/html", headers={"Content-Security-Policy": csp})
+    return Response(content=page, media_type="text/html", headers=_artifact_headers(csp))
 
 
 @router.get("/a/{artifact_id}/raw")
@@ -585,7 +605,7 @@ async def view_artifact_raw(artifact_id: str) -> Response:
     if artifact.format == ArtifactFormat.react:
         content, has_bootstrap_icons = _build_react_raw_html(artifact)
         csp = _with_same_origin_styles_and_fonts(_REACT_CSP) if has_bootstrap_icons else _REACT_CSP
-        return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": csp})
+        return Response(content=content, media_type="text/html", headers=_artifact_headers(csp))
 
     if artifact.format != ArtifactFormat.html:
         raise HTTPException(status_code=404)
@@ -598,4 +618,4 @@ async def view_artifact_raw(artifact_id: str) -> Response:
         csp = _with_same_origin_scripts(csp)
     if has_bootstrap_icons:
         csp = _with_same_origin_styles_and_fonts(csp)
-    return Response(content=content, media_type="text/html", headers={"Content-Security-Policy": csp})
+    return Response(content=content, media_type="text/html", headers=_artifact_headers(csp))

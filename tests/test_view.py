@@ -720,3 +720,39 @@ async def test_mermaid_class_outside_comment_still_triggers_after_unrelated_comm
     assert resp.status_code == 200
     assert "mermaid-init.js" in resp.text
 
+
+
+@pytest.mark.parametrize(
+    ("fmt", "content"),
+    [
+        ("html", "<p>hi</p>"),
+        ("react", "export default () => <p>hi</p>;"),
+        ("markdown", "# hi"),
+        ("code", "print('hi')"),
+        ("csv", "a,b\n1,2"),
+    ],
+)
+async def test_artifact_responses_state_x_frame_options_matching_frame_ancestors(client, fmt, content):
+    # SecurityHeadersMiddleware defaults every response to X-Frame-Options:
+    # DENY, which contradicts the frame-ancestors 'self' these CSPs set — and
+    # would forbid view_artifact's same-origin iframe of /raw for html/react.
+    # Browsers ignore X-Frame-Options when frame-ancestors is present, so the
+    # page renders either way; these assertions pin the two headers to agree
+    # rather than relying on that precedence rule.
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, content, fmt)
+
+    page_resp = await client.get(f"/a/{published['artifact_id']}")
+    assert "frame-ancestors 'self'" in page_resp.headers["content-security-policy"]
+    assert page_resp.headers["x-frame-options"] == "SAMEORIGIN"
+
+    raw_resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    if fmt in ("html", "react"):
+        # These are the ones actually framed by the page above.
+        assert "frame-ancestors 'self'" in raw_resp.headers["content-security-policy"]
+        assert raw_resp.headers["x-frame-options"] == "SAMEORIGIN"
+    else:
+        # Served as text/plain or text/csv, framed by nothing — the stricter
+        # middleware default is correct for them.
+        assert raw_resp.headers["x-frame-options"] == "DENY"
