@@ -4,7 +4,7 @@ from urllib.parse import quote, urlparse
 
 import bcrypt
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from renderdesk.auth import generate_token, hash_token
@@ -88,6 +88,18 @@ async def resolve_session(db_session: AsyncSession, token: str) -> User | None:
 
     user_result = await db_session.execute(select(User).where(User.id == session_row.user_id))
     return user_result.scalar_one_or_none()
+
+
+async def sweep_expired_sessions() -> int:
+    """Deletes every expired session row. resolve_session already cleans one
+    up opportunistically, but only when someone presents that exact token —
+    a session belonging to anyone who closed the tab and never came back is
+    otherwise never looked at again, so the row lives forever. Called on the
+    same periodic loop as the OAuth sweep (see app.py)."""
+    async with session_scope() as db_session:
+        result = await db_session.execute(delete(Session).where(Session.expires_at <= utcnow()))
+        await db_session.commit()
+    return result.rowcount
 
 
 async def delete_session(db_session: AsyncSession, token: str) -> None:

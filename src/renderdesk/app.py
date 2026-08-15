@@ -26,9 +26,10 @@ from renderdesk.oauth_consent_state import OAuthConsentBindingMiddleware
 from renderdesk.oauth_provider import oauth_provider, sweep_expired_oauth_rows
 from renderdesk.rate_limit import RateLimitMiddleware
 from renderdesk.security_headers import SecurityHeadersMiddleware
+from renderdesk.session_auth import sweep_expired_sessions
 from renderdesk.view import router as view_router
 
-_OAUTH_SWEEP_INTERVAL = timedelta(hours=1)
+_SWEEP_INTERVAL = timedelta(hours=1)
 
 _mcp_asgi_app = mcp.streamable_http_app()
 
@@ -53,14 +54,18 @@ def _run_migrations() -> None:
             time.sleep(2**attempt)
 
 
-async def _oauth_sweep_loop() -> None:
-    # Nothing else ever cleans up abandoned/expired OAuth rows (pending or
-    # issued authorization codes, expired refresh tokens, registered
-    # clients that never completed a token exchange) — see
-    # oauth_provider.sweep_expired_oauth_rows.
+async def _sweep_loop() -> None:
+    # Nothing else ever cleans any of this up, because each store is only
+    # ever pruned as a side effect of someone touching the exact row/key
+    # again — which never happens for the abandoned ones, precisely the
+    # ones worth reclaiming:
+    #  - OAuth rows: pending or issued authorization codes, expired refresh
+    #    tokens, clients that never completed a token exchange.
+    #  - Session rows: expired sessions nobody came back to present.
     while True:
-        await asyncio.sleep(_OAUTH_SWEEP_INTERVAL.total_seconds())
+        await asyncio.sleep(_SWEEP_INTERVAL.total_seconds())
         await sweep_expired_oauth_rows()
+        await sweep_expired_sessions()
 
 
 @asynccontextmanager
@@ -74,7 +79,7 @@ async def lifespan(app: FastAPI):
     # be "whatever the env var currently says."
     async with session_scope() as session:
         await ensure_auth_scheme(session, settings.auth_scheme)
-    sweep_task = asyncio.create_task(_oauth_sweep_loop())
+    sweep_task = asyncio.create_task(_sweep_loop())
     try:
         async with AsyncExitStack() as stack:
             # streamable_http_app()'s own lifespan starts the session manager;
