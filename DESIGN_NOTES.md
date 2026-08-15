@@ -392,16 +392,70 @@ remains. Until Postgres/multi-worker support lands, using one token per
 real concurrent caller (rather than sharing a single MCP token across many
 agents) is a free mitigation for this specific bottleneck.
 
-**Arbitrary npm imports for React artifacts.** A third, independent
-direction, unrelated to auth or process topology. Today's `react` format
-(see Design principles above) only has `react`/`react-dom` in scope — no
-charting/icon/animation libraries, matching what real Claude-generated
-React artifacts commonly import. Supporting that for real needs one of:
-vendoring a curated allowlist of popular packages (bounded but ongoing
-maintenance, and a new "which libraries" decision), or relaxing CSP to
-permit a specific CDN origin (reopens exactly the self-contained-artifact
-guarantee the rest of this doc treats as a hard rule) — worth deciding
-deliberately if this format sees real use, not backed into incrementally.
+**Vendoring a curated library set for React/HTML artifacts.** A third,
+independent direction, unrelated to auth or process topology. Today's
+`react` format (see Design principles above) only has `react`/`react-dom`
+in scope, and `html` artifacts can't reach any external script at all —
+neither matches what real Claude-generated artifacts commonly import
+(charting/icon/3D/data libraries), because Claude.ai's own artifact
+sandbox resolves those either from a `cdnjs.cloudflare.com` allowlist
+(`html`) or via `esm.sh` on-the-fly bundling (`react`), both of which are
+exactly the external-network dependency renderdesk's self-contained-
+artifact rule forbids.
+
+Designed (2026-08-15), not yet built — a design pass scoped this into two
+tiers and picked a first-phase library set with the user, but
+implementation is on hold pending the Docker image size question below:
+- **Tier 1 — 8 libraries with an official standalone/UMD browser build**,
+  vendorable the same way React/Mermaid/KaTeX already are (download a
+  pinned file, wire it up, no new tooling): Three.js (`three`, global
+  `THREE` — core only, `OrbitControls`/loaders live in ES-module-only
+  `examples/jsm/*` and aren't reachable this way), Lodash (`lodash`, `_`),
+  D3 (`d3`, `d3`), MathJS (`mathjs`, `math`), Chart.js (`chart.js` and
+  `chart.js/auto`, both → `Chart`, since the UMD build already
+  auto-registers everything), Tone.js (`tone`, `Tone`), PapaParse
+  (`papaparse`, `Papa`), and SheetJS (`xlsx`, `XLSX` — the one exception
+  to "same as React": SheetJS moved off the public npm registry after
+  v0.18.6, so this has to come from `cdn.sheetjs.com`, not
+  jsDelivr/unpkg).
+- **Tier 2 — Recharts, Lucide React — deferred, separate future
+  decision.** Neither has an official UMD build; Claude.ai gets them via
+  `esm.sh` bundling on demand. Vendoring them for real needs a new
+  esbuild-based local bundling step (dev-time only, run by a maintainer
+  when pinning a version, never at runtime, with `react`/`react-dom`
+  marked external so it hooks into the existing vendored globals) — a
+  standing process, not a one-off download, so it's a bigger addition than
+  Tier 1 and was deliberately not bundled into this pass. `shadcn/ui`
+  doesn't fit this model at all regardless of tier — it's copy-paste
+  source generated against Radix+Tailwind, not an installable package.
+
+Mechanism, as designed: `static/react-init.js`'s `requireShim` becomes a
+lookup table (specifier → global name) instead of a hardcoded if/else, so
+it scales past 2 entries without becoming unreadable, with an
+`undefined`-check backstop that still produces the existing readable
+in-page error if detection below has a false negative. `_REACT_ASSETS`
+becomes conditional per artifact — a regex per specifier (compiled once,
+same rigor as the existing `_MERMAID_CLASS_RE`) scans `artifact.content`
+for a matching `import`/`require` before that library's `<script>` tag is
+emitted at all, so a react artifact that doesn't use Three.js doesn't pay
+for loading it. For `html`, a new function alongside (not a
+generalization of) `_inject_mermaid_if_present` matches
+`cdnjs.cloudflare.com/ajax/libs/<slug>/<version>/...` script tags for
+these same libraries and rewrites them in place to the vendored
+same-origin equivalent — publishers write the URL pattern they're already
+trained to reach for, and it resolves without ever leaving same-origin.
+CSP handling stays a two-way switch (`_HTML_CSP` vs. one
+same-origin-scripts variant), OR'd across however many of {mermaid, cdnjs
+rewrite} fired, never a per-library CSP addition.
+
+**Open blocker: Docker image size.** The deployed image is ~90MB on
+Docker Hub today. Eight new vendored minified libraries (Three.js and
+SheetJS's `xlsx.full.min.js` are the heaviest, each several hundred KB;
+the full set is roughly low-single-digit MB uncompressed — not yet
+precisely measured) is a real, if modest, percentage increase to a
+homelab-deployed single image, and David wants to weigh that before
+committing rather than shipping it reflexively. Revisit once that
+tradeoff is settled — no code changes exist yet for any of the above.
 
 **Asset upload for MCP clients** (bypassing the tool-call size ceiling). A
 fourth, independent gap, surfaced by a real client trying to publish
