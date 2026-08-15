@@ -213,12 +213,22 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
             # Deliberately returned even if row.revoked_at is set — the reuse
             # check happens in exchange_refresh_token, not here. The SDK's own
             # expiry check (against expires_at) still applies normally.
+            #
+            # NOTE: `subject` here is a *user* id, while the identically-named
+            # field on the AccessToken returned by load_access_token below is a
+            # *connection* id. Two different identifier types under one field
+            # name on sibling objects in this module, so don't copy one site's
+            # usage to the other. The access-token meaning is the load-bearing
+            # one: auth.py reads it straight into the connection_id contextvar
+            # that scopes every MCP tool call. Nothing currently consumes this
+            # one — exchange_refresh_token re-reads the row itself rather than
+            # trusting the value here.
             return RefreshToken(
                 token=refresh_token,
                 client_id=row.client_id,
                 scopes=[],
-                expires_at=int(_ts(row.expires_at)),
                 subject=connection.user_id,
+                expires_at=int(_ts(row.expires_at)),
             )
 
     async def exchange_refresh_token(
@@ -270,12 +280,19 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
             access_row, connection = result
             if access_row.expires_at <= utcnow() or connection.revoked_at is not None:
                 return None
+            # `subject` is the *connection* id, not the user id that
+            # load_refresh_token puts in its identically-named field (see the
+            # note there). This is load-bearing and must stay a connection id:
+            # auth.py's MCPAuthMiddleware assigns it directly to the
+            # connection_id contextvar, which is what scopes every MCP tool
+            # query. Putting a user id here would silently widen every
+            # connection's visibility to its owner's whole account.
             return AccessToken(
                 token=token,
                 client_id=connection.client_id or "",
                 scopes=[],
-                expires_at=int(_ts(access_row.expires_at)),
                 subject=connection.id,
+                expires_at=int(_ts(access_row.expires_at)),
             )
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
