@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import html as html_escape
 import io
@@ -367,26 +368,55 @@ _CSV_CSS = (
 )
 
 
-def _render_csv_table(content: str) -> str:
+# The blow-up here is per-row *object* overhead, not bytes — csv.reader
+# turns every newline into a list object and every cell into a string, so
+# a 2MB file of nothing but newlines or commas still produces millions of
+# small Python objects and a matching number of "<tr></tr>"-shaped
+# strings (CLAUDE-SECURITY-RESULTS.md F7: ~140x memory amplification,
+# measured). Bounding the row count is what actually caps the blow-up —
+# capping bytes wouldn't, since the cost scales with row count at a fixed
+# byte budget. Truncating past the cap keeps the common case (any
+# reasonably-sized CSV) rendering exactly as before.
+_CSV_MAX_RENDERED_ROWS = 5000
+
+
+def _render_csv_table(content: str, raw_url: str) -> str:
     """Turn CSV content into a plain HTML table — no nh3 needed, every cell
     goes through html.escape and this only ever builds a fixed table
     skeleton, never arbitrary parsed markup (same trust model as
     render_highlighted_source above). First row is treated as a header,
     matching Claude's own CSV artifact preview and how agent-generated CSVs
     are typically shaped. Column-resize handles are added client-side by
-    csv-table-init.js, not here."""
-    rows = list(csv.reader(io.StringIO(content)))
-    if not rows:
-        return "<p>(empty)</p>"
+    csv-table-init.js, not here. Streams the reader row by row rather than
+    list()-ing it, and stops at _CSV_MAX_RENDERED_ROWS — see that constant
+    for why capping rows (not bytes) is the fix."""
 
     def _row(cells: list[str], tag: str) -> str:
         cells_html = "".join(f"<{tag}>{html_escape.escape(c)}</{tag}>" for c in cells)
         return f"<tr>{cells_html}</tr>"
 
-    header, *body = rows
+    reader = csv.reader(io.StringIO(content))
+    try:
+        header = next(reader)
+    except StopIteration:
+        return "<p>(empty)</p>"
+
     thead = f"<thead>{_row(header, 'th')}</thead>"
-    tbody = "<tbody>" + "".join(_row(r, "td") for r in body) + "</tbody>"
-    return f'<table class="csv-table">{thead}{tbody}</table>'
+    body_parts = []
+    truncated = False
+    for i, row in enumerate(reader):
+        if i >= _CSV_MAX_RENDERED_ROWS:
+            truncated = True
+            break
+        body_parts.append(_row(row, "td"))
+    tbody = "<tbody>" + "".join(body_parts) + "</tbody>"
+    table = f'<table class="csv-table">{thead}{tbody}</table>'
+    if truncated:
+        table += (
+            f"<p>Showing the first {_CSV_MAX_RENDERED_ROWS} rows. "
+            f'<a href="{raw_url}">Download the full file</a> to see the rest.</p>'
+        )
+    return table
 
 
 def _fence_with_extras(
@@ -622,8 +652,12 @@ async def view_artifact(artifact_id: str) -> Response:
         return Response(content=body, media_type="text/html", headers=_artifact_headers(_PAGE_CSP))
 
     if artifact.format == ArtifactFormat.csv:
-        # Read-only table view, never executed.
-        table_html = _render_csv_table(artifact.content)
+        # Read-only table view, never executed. Parsing/building is capped
+        # (see _CSV_MAX_RENDERED_ROWS) but still real CPU work over up to
+        # max_bytes_per_artifact bytes, so it's offloaded to a thread
+        # rather than blocking the event loop for every other request.
+        raw_url = f"/a/{html_escape.escape(artifact_id)}/raw"
+        table_html = await asyncio.to_thread(_render_csv_table, artifact.content, raw_url)
 
         title = html_escape.escape(artifact.title or "Untitled")
         body = (

@@ -181,6 +181,25 @@ async def test_empty_csv_artifact_renders_without_error(client):
     assert "(empty)" in resp.text
 
 
+async def test_large_csv_artifact_is_row_capped_not_fully_rendered(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F7: rendering every row of a
+    # multi-million-row CSV amplifies into hundreds of MB of transient
+    # allocation. The table view has to stop at a row cap and point at the
+    # raw download instead of materializing everything.
+    from renderdesk.view import _CSV_MAX_RENDERED_ROWS
+
+    connection_id = await make_connection()
+    content = "col\n" + "\n".join(str(i) for i in range(_CSV_MAX_RENDERED_ROWS + 500))
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, content, "csv")
+
+    resp = await client.get(f"/a/{published['artifact_id']}")
+    assert resp.status_code == 200
+    assert resp.text.count("<tr>") == _CSV_MAX_RENDERED_ROWS + 1  # header + capped body rows
+    assert f"Showing the first {_CSV_MAX_RENDERED_ROWS} rows" in resp.text
+    assert f"/a/{published['artifact_id']}/raw" in resp.text
+
+
 async def test_html_wrapper_page_also_follows_dashboard_theme(client):
     connection_id = await make_connection()
     async with session_scope() as session:
