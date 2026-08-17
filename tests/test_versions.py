@@ -33,7 +33,7 @@ async def test_list_versions_returns_all_in_descending_order_with_current_flagge
     assert history[0]["is_current"] is True
     assert history[1]["is_current"] is False
     assert history[2]["is_current"] is False
-    assert history[0]["byte_size"] == len(b"v3")
+    assert history[0]["byte_size"] == len(b"v3") + len(b"Doc")
 
 
 async def test_list_versions_reports_byte_size_for_multibyte_content():
@@ -56,7 +56,11 @@ async def test_list_versions_reports_byte_size_for_multibyte_content():
     async with session_scope() as session:
         history = await versions.list_versions(session, owner_id, published["artifact_id"])
 
-    assert [v["byte_size"] for v in history] == [len((body * 2).encode()), len(body.encode())]
+    title_bytes = len(b"Doc")
+    assert [v["byte_size"] for v in history] == [
+        len((body * 2).encode()) + title_bytes,
+        len(body.encode()) + title_bytes,
+    ]
 
 
 async def test_every_version_write_path_records_byte_size():

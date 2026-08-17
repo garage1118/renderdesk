@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     max_artifacts_per_connection: int = 200
     max_bytes_per_artifact: int = 2_000_000
     max_total_bytes_per_connection: int = 50_000_000
+    # Bounds the one table quotas.py's byte accounting didn't originally
+    # cover (see DESIGN_NOTES.md / CLAUDE-SECURITY-RESULTS.md F3):
+    # update_artifact appends a full content copy per call with no
+    # automatic pruning, so an unbounded update loop could otherwise write
+    # far more than max_total_bytes_per_connection actually allows once
+    # version history is counted. Enforced at write time in
+    # tools.update_artifact by deleting the oldest versions beyond this
+    # count, inside the same quota_lock-held transaction as the write.
+    max_versions_per_artifact: int = 20
 
     session_expiry_days: int = 30
 

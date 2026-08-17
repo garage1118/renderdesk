@@ -320,3 +320,53 @@ async def test_reassign_respects_target_connection_quota(monkeypatch):
             await tools.reassign_artifact_connection(
                 session, owner_id, published["artifact_id"], connection_b
             )
+
+
+async def test_repeated_updates_are_bounded_by_connection_quota(monkeypatch):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F3: update_artifact appends
+    # a full version row on every call, so a connection's byte quota has to
+    # account for that history — not just the artifact's current
+    # byte_size — or an update loop can write far past its quota.
+    monkeypatch.setattr(settings, "max_total_bytes_per_connection", 30)
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "x" * 10, "markdown")
+
+    version = 1
+    with pytest.raises(QuotaExceededError):
+        for _ in range(10):
+            async with session_scope() as session:
+                result = await tools.update_artifact(
+                    session, connection_id, published["artifact_id"], "y" * 10, base_version=version
+                )
+            version = result["version"]
+
+
+async def test_update_prunes_version_history_beyond_retention_limit(monkeypatch):
+    monkeypatch.setattr(settings, "max_versions_per_artifact", 2)
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "v1", "markdown")
+
+    version = 1
+    for i in range(3):
+        async with session_scope() as session:
+            result = await tools.update_artifact(
+                session, connection_id, published["artifact_id"], f"v{i + 2}", base_version=version
+            )
+        version = result["version"]
+
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(ArtifactVersion.version).where(ArtifactVersion.artifact_id == published["artifact_id"])
+            )
+        ).scalars().all()
+    assert sorted(rows) == [3, 4]
+
+
+async def test_publish_rejects_oversized_title():
+    connection_id = await make_connection()
+    async with session_scope() as session:
+        with pytest.raises(QuotaExceededError):
+            await tools.publish_artifact(session, connection_id, "hi", "markdown", "x" * 1000)

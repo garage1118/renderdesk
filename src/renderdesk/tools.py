@@ -10,6 +10,24 @@ from renderdesk.models import OAuthAccessToken as OAuthAccessTokenRow
 from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 from renderdesk.quotas import QuotaExceededError, check_new_artifact_quota, check_update_quota, quota_lock
 
+# title/language were previously written unbounded and unmeasured — quotas
+# only ever accounted for content bytes (see CLAUDE-SECURITY-RESULTS.md
+# F3), so an oversized title could write far more than its 1-byte
+# `content='x'` would suggest. Small, fixed caps rather than settings:
+# these are display metadata, not a deployment-tunable storage budget.
+MAX_TITLE_BYTES = 500
+MAX_LANGUAGE_BYTES = 100
+
+
+def _check_metadata_size(title: str | None, language: str | None) -> None:
+    # Character count is a safe cheap upper bound on encoded byte size
+    # (UTF-8 never shrinks a string), same pattern as the content-size
+    # check below — rejects before ever encoding.
+    if title is not None and len(title) > MAX_TITLE_BYTES:
+        raise QuotaExceededError(f"quota_exceeded: title exceeds {MAX_TITLE_BYTES} bytes")
+    if language is not None and len(language) > MAX_LANGUAGE_BYTES:
+        raise QuotaExceededError(f"quota_exceeded: language exceeds {MAX_LANGUAGE_BYTES} bytes")
+
 
 class NotFoundError(Exception):
     pass
@@ -211,7 +229,11 @@ async def publish_artifact(
         raise QuotaExceededError(
             f"quota_exceeded: artifact exceeds {settings.max_bytes_per_artifact} bytes per artifact"
         )
-    byte_size = len(content.encode())
+    _check_metadata_size(title, language)
+    # byte_size backs both the connection quota and reported artifact size,
+    # so it has to reflect everything actually written — title/language
+    # bytes included, not just content (see CLAUDE-SECURITY-RESULTS.md F3).
+    byte_size = len(content.encode()) + len((title or "").encode()) + len((language or "").encode())
 
     async with quota_lock(connection_id):
         await check_new_artifact_quota(session, connection_id, byte_size)
@@ -258,7 +280,7 @@ async def update_artifact(
         raise QuotaExceededError(
             f"quota_exceeded: artifact exceeds {settings.max_bytes_per_artifact} bytes per artifact"
         )
-    byte_size = len(content.encode())
+    _check_metadata_size(title, language)
 
     # Locked from the version check through the commit: besides closing the
     # same quota TOCTOU as publish_artifact, this also makes the
@@ -274,15 +296,20 @@ async def update_artifact(
             )
 
         new_format = _parse_format(format) if format is not None else artifact.format
+        # Resolve title/language to what will actually be stored (an
+        # omitted field keeps the artifact's current value) before sizing,
+        # so byte_size — and the quota check below — reflect the metadata
+        # that's really being written, not just the new content.
+        new_title = title if title is not None else artifact.title
+        new_language = language if language is not None else artifact.language
+        byte_size = len(content.encode()) + len((new_title or "").encode()) + len((new_language or "").encode())
         await check_update_quota(session, connection_id, artifact_id, byte_size)
 
         artifact.content = content
         artifact.format = new_format
         artifact.byte_size = byte_size
-        if title is not None:
-            artifact.title = title
-        if language is not None:
-            artifact.language = language
+        artifact.title = new_title
+        artifact.language = new_language
         artifact.version += 1
 
         session.add(
@@ -292,10 +319,39 @@ async def update_artifact(
                 content=content,
                 byte_size=byte_size,
                 format=new_format,
-                language=artifact.language,
-                title=artifact.title,
+                language=new_language,
+                title=new_title,
             )
         )
+
+        # Retention: an update loop against one artifact would otherwise
+        # grow artifact_versions without bound even though the connection's
+        # accounted total (check_update_quota, above) stays correct — the
+        # cap on *count* has to be enforced independently of the cap on
+        # *bytes*. Prune inside this same quota_lock-held transaction so a
+        # concurrent update against this artifact can't race the count.
+        await session.flush()
+        version_count = (
+            await session.execute(
+                select(func.count()).select_from(ArtifactVersion).where(ArtifactVersion.artifact_id == artifact_id)
+            )
+        ).scalar_one()
+        if version_count > settings.max_versions_per_artifact:
+            keep_versions = (
+                await session.execute(
+                    select(ArtifactVersion.version)
+                    .where(ArtifactVersion.artifact_id == artifact_id)
+                    .order_by(ArtifactVersion.version.desc())
+                    .limit(settings.max_versions_per_artifact)
+                )
+            ).scalars().all()
+            await session.execute(
+                delete(ArtifactVersion).where(
+                    ArtifactVersion.artifact_id == artifact_id,
+                    ArtifactVersion.version.not_in(keep_versions),
+                )
+            )
+
         await session.commit()
 
     return {"version": artifact.version, "url": _artifact_url(artifact_id)}
