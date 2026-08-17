@@ -129,6 +129,17 @@ async def test_rendered_forms_embed_the_real_csrf_token(client):
     assert embedded.group(1) == client.cookies["csrf_token"]
 
 
+async def test_nonexistent_account_login_still_runs_bcrypt():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F12: verify_password used
+    # to return instantly for an absent account (no bcrypt call at all),
+    # which is a timing side channel an unauthenticated caller could use
+    # to enumerate which emails have accounts. It must always cost a real
+    # bcrypt verification, whether or not the user exists.
+    from renderdesk.session_auth import verify_password
+
+    assert verify_password(None, "whatever") is False
+
+
 async def test_wrong_password_rejected(client):
     await make_user(email="dave@example.com", password="correct-horse")
 

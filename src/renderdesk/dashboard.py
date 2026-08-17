@@ -98,7 +98,13 @@ async def login_submit(
     # per window.
     async with session_scope() as session:
         user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
-        if user is not None and verify_password(user, password):
+        # verify_password is always called, even when user is None — it
+        # runs a real bcrypt verification against a dummy hash in that
+        # case (CLAUDE-SECURITY-RESULTS.md F12), so an absent account
+        # costs the same as a wrong password on a real one instead of
+        # returning near-instantly.
+        password_ok = verify_password(user, password)
+        if user is not None and password_ok:
             clear_failed_logins(email)
             token = await create_session(session, user)
         else:

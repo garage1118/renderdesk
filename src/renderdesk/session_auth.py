@@ -55,13 +55,30 @@ def sweep_stale_failed_logins() -> int:
     return len(stale)
 
 
-def verify_password(user: User, password: str) -> bool:
-    if user.password_hash is None:
-        # An OIDC-provisioned user, or an instance switched back to
-        # "password" via set-auth-scheme without one being set yet.
+# A fixed dummy hash (same cost factor as a real one, bcrypt's default 12
+# rounds) verified against whenever there's no real hash to check —
+# account absent, or an OIDC-provisioned user with no password set. Without
+# this, that path returns False after a single indexed lookup while a real
+# account takes the hundreds of milliseconds bcrypt.checkpw costs by
+# design, which is a two-to-three-order-of-magnitude timing side channel
+# an unauthenticated caller can use to enumerate which emails have
+# accounts (CLAUDE-SECURITY-RESULTS.md F12). Generated once at import so
+# every "no real hash" call costs the same as a real check, every time.
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"renderdesk-timing-placeholder", bcrypt.gensalt(rounds=12)).decode()
+
+
+def verify_password(user: User | None, password: str) -> bool:
+    password_hash = user.password_hash if user is not None else None
+    if password_hash is None:
+        # Always spend a real bcrypt verification even though the result
+        # is discarded — see _DUMMY_PASSWORD_HASH above.
+        try:
+            bcrypt.checkpw(password.encode(), _DUMMY_PASSWORD_HASH.encode())
+        except ValueError:
+            pass
         return False
     try:
-        return bcrypt.checkpw(password.encode(), user.password_hash.encode())
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
     except ValueError:
         # bcrypt 5.x raises rather than truncating for passwords >72 bytes.
         # Without this, that case 500s instead of failing like any other
