@@ -34,6 +34,19 @@ class Settings(BaseSettings):
 
     session_expiry_days: int = 30
 
+    # Only consumed by docker-entrypoint.sh (passed straight to uvicorn's
+    # --forwarded-allow-ips), never read elsewhere in the app — declared
+    # here anyway so the one clearly dangerous value can be rejected before
+    # the app is trusted to run behind a proxy. '*' makes X-Forwarded-For
+    # trivially attacker-spoofable, defeating every IP-keyed rate limit
+    # (login lockout, OAuth registration/token). Left unset, uvicorn trusts
+    # only 127.0.0.1 and silently ignores X-Forwarded-For from a real
+    # proxy — safe rather than a startup failure, but collapses every
+    # client behind that proxy into one shared rate-limit bucket; see the
+    # startup warning in app.py for that case. See
+    # CLAUDE-SECURITY-RESULTS.md F8.
+    trusted_proxy_ips: str | None = None
+
     # Read only by the Stage 2 migration to seed the first User row — never
     # read by the running app itself, so it's fine to unset after that runs.
     admin_bootstrap_email: str | None = None
@@ -60,6 +73,16 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(", ".join(missing))
+        return self
+
+    @model_validator(mode="after")
+    def _reject_wildcard_trusted_proxy(self) -> "Settings":
+        if self.trusted_proxy_ips == "*":
+            raise ValueError(
+                "trusted_proxy_ips must never be '*' — it makes X-Forwarded-For "
+                "trivially spoofable, defeating every IP-keyed rate limit. Set it "
+                "to the actual reverse proxy's IP or CIDR instead."
+            )
         return self
 
 

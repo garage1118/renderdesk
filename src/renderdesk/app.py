@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
@@ -30,6 +31,8 @@ from renderdesk.static_files import CORSStaticFiles
 from renderdesk.view import router as view_router
 
 _SWEEP_INTERVAL = timedelta(hours=1)
+
+_logger = logging.getLogger("renderdesk")
 
 _mcp_asgi_app = mcp.streamable_http_app()
 
@@ -75,6 +78,22 @@ async def _sweep_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # If unset, X-Forwarded-For is silently ignored (uvicorn only trusts
+    # 127.0.0.1 by default) and every request behind a real reverse proxy
+    # appears to share the proxy's address — collapsing the login lockout
+    # and OAuth rate limits (rate_limit.py) into one bucket for every real
+    # client (CLAUDE-SECURITY-RESULTS.md F8). This can't be detected from
+    # inside the app (the peer address alone doesn't say "this is a
+    # proxy"), so it's a loud startup log rather than a refusal to start —
+    # a direct-to-internet deployment with no reverse proxy legitimately
+    # has nothing to set here.
+    if not settings.trusted_proxy_ips:
+        _logger.warning(
+            "RENDERDESK_TRUSTED_PROXY_IPS is unset. If this instance is behind a "
+            "reverse proxy, X-Forwarded-For will be ignored and every request will "
+            "appear to come from the proxy's address, collapsing all IP-based rate "
+            "limits into one shared bucket. Set it to the proxy's IP or CIDR."
+        )
     # Runs synchronously (Alembic has no async API) but only once at startup,
     # so it's offloaded to a thread rather than blocking the event loop.
     await asyncio.to_thread(_run_migrations)

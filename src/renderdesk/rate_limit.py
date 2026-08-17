@@ -29,19 +29,22 @@ def record_attempt(bucket: str, key: str) -> None:
     _attempts[(bucket, key)].append(utcnow())
 
 
-# (bucket, max_attempts, window) per rate-limited endpoint. Module-level
-# rather than a class attribute on the middleware so _MAX_WINDOW below can
-# be derived from it — a new rule with a longer window then widens the
-# sweep automatically instead of silently outliving it.
-_RULES: dict[tuple[str, str], tuple[str, int, timedelta]] = {
-    ("POST", "/register"): ("register", 5, timedelta(hours=1)),
-    ("GET", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
-    ("POST", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5)),
-    ("POST", "/token"): ("oauth_coarse", 60, timedelta(minutes=5)),
-    ("POST", "/revoke"): ("oauth_coarse", 60, timedelta(minutes=5)),
-    ("POST", "/dashboard/login"): ("login_ip", 20, timedelta(minutes=15)),
+# (bucket, max_attempts, window, count_on_success) per rate-limited
+# endpoint. Module-level rather than a class attribute on the middleware so
+# _MAX_WINDOW below can be derived from it — a new rule with a longer
+# window then widens the sweep automatically instead of silently outliving
+# it. count_on_success is False only for login_ip: a successful login
+# shouldn't spend down the same budget that's meant to slow down wrong-
+# password guesses (see the dispatch logic below).
+_RULES: dict[tuple[str, str], tuple[str, int, timedelta, bool]] = {
+    ("POST", "/register"): ("register", 5, timedelta(hours=1), True),
+    ("GET", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5), True),
+    ("POST", "/authorize"): ("oauth_coarse", 60, timedelta(minutes=5), True),
+    ("POST", "/token"): ("oauth_coarse", 60, timedelta(minutes=5), True),
+    ("POST", "/revoke"): ("oauth_coarse", 60, timedelta(minutes=5), True),
+    ("POST", "/dashboard/login"): ("login_ip", 20, timedelta(minutes=15), False),
 }
-_MAX_WINDOW = max(window for _, _, window in _RULES.values())
+_MAX_WINDOW = max(window for _, _, window, _count_on_success in _RULES.values())
 
 
 def sweep_stale_attempts() -> int:
@@ -70,17 +73,38 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     of session_auth's existing per-email lockout (which alone lets anyone
     lock out a known user indefinitely with 5 requests).
 
-    request.client.host is trustworthy here: docker-entrypoint.sh passes
-    RENDERDESK_TRUSTED_PROXY_IPS to uvicorn's --forwarded-allow-ips, so
-    Starlette only honors X-Forwarded-For from a configured reverse proxy.
+    request.client.host is trustworthy only if RENDERDESK_TRUSTED_PROXY_IPS
+    is actually set in the deploy environment (docker-entrypoint.sh passes
+    it to uvicorn's --forwarded-allow-ips) — that variable is never baked
+    into the image, so a deployment behind a reverse proxy that forgets to
+    set it gets every request attributed to the proxy's own address, and
+    every limit here collapses into one shared bucket for every real
+    client (CLAUDE-SECURITY-RESULTS.md F8; app.py logs a startup warning
+    for this case, since it can't be detected or fixed from inside the
+    app).
     """
 
     async def dispatch(self, request: Request, call_next):
         rule = _RULES.get((request.method, request.url.path))
-        if rule is not None:
-            bucket, max_attempts, window = rule
-            client_ip = request.client.host if request.client else "unknown"
-            if is_rate_limited(bucket, client_ip, max_attempts, window):
-                return PlainTextResponse("Too many requests", status_code=429)
+        if rule is None:
+            return await call_next(request)
+
+        bucket, max_attempts, window, count_on_success = rule
+        client_ip = request.client.host if request.client else "unknown"
+        if is_rate_limited(bucket, client_ip, max_attempts, window):
+            return PlainTextResponse("Too many requests", status_code=429)
+
+        if count_on_success:
             record_attempt(bucket, client_ip)
-        return await call_next(request)
+            return await call_next(request)
+
+        # login_ip: only a failed attempt should spend down the budget —
+        # a legitimate user logging in repeatedly (or re-authenticating
+        # after a session expires) shouldn't get themselves rate-limited
+        # by their own successful logins. login_submit returns 303 only on
+        # success, so anything else (401 wrong credentials, 429 already
+        # locked by the per-email lockout, etc.) counts as an attempt.
+        response = await call_next(request)
+        if response.status_code != 303:
+            record_attempt(bucket, client_ip)
+        return response

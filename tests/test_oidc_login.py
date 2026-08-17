@@ -441,3 +441,18 @@ def test_settings_oidc_scheme_with_all_fields_succeeds():
 def test_settings_password_scheme_does_not_require_oidc_fields():
     s = Settings(public_base_url="http://localhost:8000", auth_scheme="password")
     assert s.oidc_issuer_url is None
+
+
+def test_settings_rejects_wildcard_trusted_proxy_ips():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F8: '*' makes
+    # X-Forwarded-For trivially attacker-spoofable, defeating every
+    # IP-keyed rate limit.
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(public_base_url="http://localhost:8000", auth_scheme="password", trusted_proxy_ips="*")
+    message = str(exc_info.value.errors()[0]["ctx"]["error"])
+    assert "trusted_proxy_ips" in message
+
+
+def test_settings_accepts_a_real_trusted_proxy_ip():
+    s = Settings(public_base_url="http://localhost:8000", auth_scheme="password", trusted_proxy_ips="10.0.0.5")
+    assert s.trusted_proxy_ips == "10.0.0.5"

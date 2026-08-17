@@ -150,6 +150,18 @@ async def test_repeated_failed_logins_are_rate_limited(client):
     assert resp.status_code == 429
 
 
+async def test_repeated_successful_logins_do_not_exhaust_the_ip_rate_limit(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F8: RateLimitMiddleware's
+    # login_ip bucket used to count every POST to /dashboard/login,
+    # success included, so a user who legitimately logs in often could
+    # eventually rate-limit themselves. Only failures should count.
+    await make_user(email="frequent-login@example.com", password="correct-horse")
+
+    for _ in range(25):
+        resp = await _login(client, "frequent-login@example.com", "correct-horse")
+        assert resp.status_code == 303
+
+
 async def test_correct_password_always_succeeds_even_when_locked_out(client):
     # Regression for CLAUDE-SECURITY-RESULTS.md F5: the lockout is keyed on
     # the submitted email alone, so an unauthenticated attacker who knows
