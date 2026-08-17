@@ -88,17 +88,31 @@ async def login_submit(
     request: Request, email: str = Form(...), password: str = Form(...), next: str = Form("/dashboard")
 ):
     _require_password_scheme()
-    if is_login_rate_limited(email):
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"scheme": "password", "error": "Too many failed attempts. Try again in a few minutes.", "next": next},
-            status_code=429,
-        )
-
+    # Credentials are checked before the lockout is consulted at all: an
+    # unauthenticated caller who only knows a victim's email must not be
+    # able to lock the real owner out just by submitting wrong passwords
+    # (CLAUDE-SECURITY-RESULTS.md F5) — the owner presenting the *correct*
+    # password always gets in, regardless of how many failed attempts
+    # preceded it. The lockout still gates the 401 path, so a caller
+    # without the real password can't brute-force it past five guesses
+    # per window.
     async with session_scope() as session:
         user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
-        if user is None or not verify_password(user, password):
+        if user is not None and verify_password(user, password):
+            clear_failed_logins(email)
+            token = await create_session(session, user)
+        else:
+            if is_login_rate_limited(email):
+                return templates.TemplateResponse(
+                    request,
+                    "login.html",
+                    {
+                        "scheme": "password",
+                        "error": "Too many failed attempts. Try again in a few minutes.",
+                        "next": next,
+                    },
+                    status_code=429,
+                )
             record_failed_login(email)
             return templates.TemplateResponse(
                 request,
@@ -106,8 +120,6 @@ async def login_submit(
                 {"scheme": "password", "error": "Invalid email or password", "next": next},
                 status_code=401,
             )
-        clear_failed_logins(email)
-        token = await create_session(session, user)
 
     response = RedirectResponse(url=safe_next_path(next), status_code=303)
     response.set_cookie(

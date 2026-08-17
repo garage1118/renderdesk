@@ -145,14 +145,28 @@ async def test_repeated_failed_logins_are_rate_limited(client):
         resp = await _login(client, "bruteforce@example.com", "wrong-password")
         assert resp.status_code == 401
 
-    # 6th attempt is locked out even with a wrong password...
+    # 6th attempt is locked out with a wrong password...
     resp = await _login(client, "bruteforce@example.com", "wrong-password")
     assert resp.status_code == 429
 
-    # ...and even with the correct one.
-    resp = await _login(client, "bruteforce@example.com", "correct-horse")
-    assert resp.status_code == 429
-    assert "renderdesk_session" not in client.cookies
+
+async def test_correct_password_always_succeeds_even_when_locked_out(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F5: the lockout is keyed on
+    # the submitted email alone, so an unauthenticated attacker who knows
+    # only a victim's email must not be able to lock the real owner out —
+    # credentials are checked before the lockout is ever consulted, so the
+    # owner presenting the correct password always gets in.
+    await make_user(email="realowner@example.com", password="correct-horse")
+
+    for _ in range(5):
+        resp = await _login(client, "realowner@example.com", "wrong-password")
+        assert resp.status_code == 401
+
+    # An unauthenticated attacker has now driven the lockout to its limit,
+    # but the real owner's correct password still succeeds.
+    resp = await _login(client, "realowner@example.com", "correct-horse")
+    assert resp.status_code == 303
+    assert "renderdesk_session" in client.cookies
 
 
 async def test_login_then_dashboard_lists_own_artifact(client):
