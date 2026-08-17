@@ -67,6 +67,15 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
             return OAuthClientInformationFull.model_validate(row.metadata_json)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        # No redirect_uris allowlist here, deliberately — see DESIGN_NOTES.md
+        # "Accepted risk: dynamic client registration makes /authorize's
+        # error path an open redirector" (CLAUDE-SECURITY-RESULTS.md F21).
+        # RFC 6749's error-redirect semantics point at whatever URI the
+        # client registered, and that URI is attacker's-perspective-
+        # arbitrary for every legitimate dynamically-registered client too
+        # — there's no way to distinguish a real browser-based MCP client
+        # from a fake one by redirect_uri shape alone, so an allowlist
+        # would reject real clients along with attacker ones.
         metadata = client_info.model_dump(mode="json")
         metadata_bytes = len(json.dumps(metadata).encode())
         if metadata_bytes > _MAX_CLIENT_METADATA_BYTES:

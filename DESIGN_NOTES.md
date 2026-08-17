@@ -293,6 +293,26 @@ survive restarts (currently just the locked-in auth scheme).
   reduce disk usage. A pruned or historical version is always rendered
   plain-escaped regardless of its original format, never re-executed as
   HTML.
+- **Accepted risk: dynamic client registration makes `/authorize`'s error
+  path an open redirector.** Anyone can `POST /register` with an
+  attacker-chosen `redirect_uris` entry, then send a link to `/authorize`
+  with a request malformed enough to hit the error branch — RFC 6749
+  requires that branch to redirect to the client's own registered URI,
+  before login or consent, so a visitor following that link gets bounced
+  from renderdesk's domain to the attacker's page. Deliberately not
+  "fixed" with a redirect_uri host allowlist: every legitimate dynamically-
+  registered client (the browser-based MCP clients this whole surface
+  exists to support) has an equally attacker's-perspective-arbitrary URI,
+  so an allowlist would reject real clients along with fake ones — RFC
+  6749 doesn't leave room for the server to tell them apart at
+  registration time. The residual harm is link-laundering for phishing
+  (lending the domain and TLS cert to an attacker's landing page), not
+  token theft or account takeover — see CLAUDE-SECURITY-RESULTS.md F21 for
+  the full writeup and the options considered. Revisit if dynamic
+  registration ever grows an operator-approval step, which would close
+  this as a side effect — see "Finer-grained permissions" under
+  Limitations and roadmap below for the closest existing plan in that
+  direction (currently unstarted).
 
 ## Migrations
 
