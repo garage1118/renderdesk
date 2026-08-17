@@ -173,11 +173,31 @@ _BOOTSTRAP_ICONS_ASSET = (
 # attribute; a plain-text false positive (e.g. a sentence containing
 # "bi-weekly" outside any class attribute) can't match since the token has
 # to sit inside quotes following class= or className=.
-_BOOTSTRAP_ICONS_CLASS_RE = re.compile(
-    r"""class(?:Name)?\s*=\s*["'][^"']*\bbi-[a-z0-9-]+\b[^"']*["']""", re.IGNORECASE
-)
+#
+# Deliberately *not* a single regex like
+# `class(?:Name)?\s*=\s*["'][^"']*\bbi-[a-z0-9-]+\b[^"']*["']` — with no
+# closing quote in the input, the `[^"']*` runs on both sides of the fixed
+# `bi-` literal backtrack once per candidate `bi-` match, which is
+# quadratic against a payload repeating `bi-a ` inside one unterminated
+# attribute. Splitting attribute-value extraction (deterministic: consume
+# to the matching quote or fail, no ambiguity to backtrack over) from the
+# `bi-` search (run only against that already-bounded value) keeps each
+# stage linear.
+_CLASS_ATTR_RE = re.compile(r"""class(?:Name)?\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+_BOOTSTRAP_ICONS_TOKEN_RE = re.compile(r"\bbi-[a-z0-9-]+\b", re.IGNORECASE)
 
-# None of the detection regexes below are HTML-comment-aware — they scan
+
+def _has_bootstrap_icons_class(content: str) -> bool:
+    if "bi-" not in content:
+        return False
+    for match in _CLASS_ATTR_RE.finditer(content):
+        value = match.group(1) if match.group(1) is not None else match.group(2)
+        if _BOOTSTRAP_ICONS_TOKEN_RE.search(value):
+            return True
+    return False
+
+
+# None of the detection below is HTML-comment-aware by regex — it scans
 # raw text, so a false match can hide inside an <!-- ... --> comment, not
 # just a real element/attribute. That's not a security issue (a false
 # match only ever adds 'self' to script-src, and connect-src stays 'none'
@@ -193,11 +213,50 @@ _BOOTSTRAP_ICONS_CLASS_RE = re.compile(
 # awareness via a real parser would be a bigger change than this class of
 # heuristic detection warrants, consistent with _MERMAID_CLASS_RE's
 # existing regex-not-a-parser approach.
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+#
+# Implemented as a plain `str.find` loop rather than the regex
+# `<!--.*?-->` it replaces: that lazy-dot-star pattern re-scans from every
+# `<!--` occurrence looking for a `-->` that may never arrive, which is
+# quadratic against a payload of nothing but repeated `<!--`. `str.find`
+# uses a linear substring search with no backtracking, so this is O(n)
+# regardless of how many unterminated comment-opens the input contains.
+def _find_html_comment_spans(content: str) -> list[tuple[int, int]]:
+    if "<!--" not in content:
+        return []
+    spans = []
+    pos = 0
+    length = len(content)
+    while True:
+        start = content.find("<!--", pos)
+        if start == -1:
+            break
+        end = content.find("-->", start + 4)
+        if end == -1:
+            spans.append((start, length))
+            break
+        spans.append((start, end + 3))
+        pos = end + 3
+    return spans
+
+
+def _strip_spans(content: str, spans: list[tuple[int, int]]) -> str:
+    if not spans:
+        return content
+    out = []
+    pos = 0
+    for start, end in spans:
+        out.append(content[pos:start])
+        pos = end
+    out.append(content[pos:])
+    return "".join(out)
+
+
+def _strip_html_comments(content: str) -> str:
+    return _strip_spans(content, _find_html_comment_spans(content))
 
 
 def _inject_bootstrap_icons_if_present(content: str) -> tuple[str, bool]:
-    if not _BOOTSTRAP_ICONS_CLASS_RE.search(_HTML_COMMENT_RE.sub("", content)):
+    if not _has_bootstrap_icons_class(_strip_html_comments(content)):
         return content, False
     match = _BODY_CLOSE_RE.search(content)
     if match:
@@ -405,9 +464,9 @@ def _inject_mermaid_if_present(content: str) -> tuple[str, bool]:
     own artifact viewer recognizes) gets the vendored mermaid runtime spliced
     in automatically, so publishers don't have to inline the whole library
     themselves just to draw a diagram. Detection ignores HTML comments
-    (see _HTML_COMMENT_RE) — the splice below still targets the real,
+    (see _strip_html_comments) — the splice below still targets the real,
     unstripped content."""
-    if not _MERMAID_CLASS_RE.search(_HTML_COMMENT_RE.sub("", content)):
+    if not _MERMAID_CLASS_RE.search(_strip_html_comments(content)):
         return content, False
 
     match = _BODY_CLOSE_RE.search(content)
@@ -449,11 +508,20 @@ def _rewrite_cdn_library_urls(content: str) -> tuple[str, bool]:
     tag are dropped along with it — they'd be meaningless, or actively
     wrong, once pointed at a different file. Slugs not in
     _CDNJS_SLUG_TO_ASSET are left untouched — as is any match sitting
-    inside an HTML comment (see _HTML_COMMENT_RE): rewriting it would
-    still work (a commented-out <script> stays inert either way), but
-    skipping it means an artifact that merely *mentions* a cdnjs URL in
-    an explanatory comment doesn't needlessly widen the CSP."""
-    comment_spans = [m.span() for m in _HTML_COMMENT_RE.finditer(content)]
+    inside an HTML comment (see _find_html_comment_spans): rewriting it
+    would still work (a commented-out <script> stays inert either way),
+    but skipping it means an artifact that merely *mentions* a cdnjs URL
+    in an explanatory comment doesn't needlessly widen the CSP.
+
+    Bails out on a plain substring check before running the regex at
+    all — cdnjs.cloudflare.com/ajax/libs/ has to literally appear for a
+    match to ever be possible, and that check is a linear scan with none
+    of _CDNJS_SCRIPT_RE's backtracking exposure, so it's a cheap way to
+    skip the regex entirely for the vast majority of html artifacts that
+    never reference cdnjs."""
+    if "cdnjs.cloudflare.com/ajax/libs/" not in content:
+        return content, False
+    comment_spans = _find_html_comment_spans(content)
     rewritten = False
 
     def _in_comment(pos: int) -> bool:
@@ -493,7 +561,7 @@ def _build_react_raw_html(artifact: Artifact) -> tuple[str, bool]:
     CSP change of their own)."""
     title = html_escape.escape(artifact.title or "Untitled")
     source_json = json.dumps(artifact.content).replace("</", "<\\/")
-    has_bootstrap_icons = bool(_BOOTSTRAP_ICONS_CLASS_RE.search(artifact.content))
+    has_bootstrap_icons = _has_bootstrap_icons_class(artifact.content)
     icons_asset = _BOOTSTRAP_ICONS_ASSET if has_bootstrap_icons else ""
     content = (
         f"<!doctype html><title>{title}</title><style>html,body{{margin:0}}</style>"
