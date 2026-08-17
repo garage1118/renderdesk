@@ -29,7 +29,9 @@ from renderdesk.oidc import OidcError, build_authorization_url, exchange_code_an
 from renderdesk.oidc_state import (
     OIDC_STATE_COOKIE_NAME,
     OIDC_STATE_MAX_AGE,
+    is_state_used,
     make_cookie_value,
+    mark_state_used,
     read_cookie_value,
 )
 from renderdesk.quotas import QuotaExceededError
@@ -234,6 +236,13 @@ async def oidc_callback(
         return _fail("Your sign-in attempt expired or is invalid. Please try again.")
     if not state or not secrets.compare_digest(state, flow["s"]):
         return _fail("Sign-in state mismatch. Please try again.")
+    # Single-use: marked before the code exchange is even attempted, and
+    # regardless of whether it later succeeds, so a captured or
+    # self-minted state cookie can't fund more than one outbound token
+    # exchange (CLAUDE-SECURITY-RESULTS.md F16).
+    if is_state_used(flow["s"]):
+        return _fail("Your sign-in attempt expired or is invalid. Please try again.")
+    mark_state_used(flow["s"])
     if not code:
         return _fail("The identity provider did not return an authorization code.")
 

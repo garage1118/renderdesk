@@ -43,6 +43,15 @@ _RULES: dict[tuple[str, str], tuple[str, int, timedelta, bool]] = {
     ("POST", "/token"): ("oauth_coarse", 60, timedelta(minutes=5), True),
     ("POST", "/revoke"): ("oauth_coarse", 60, timedelta(minutes=5), True),
     ("POST", "/dashboard/login"): ("login_ip", 20, timedelta(minutes=15), False),
+    # A GET here is cheap for the caller but funds a real outbound,
+    # client-secret-authenticated POST to the IdP's token endpoint once it
+    # reaches the callback — oidc_state.py's single-use/time-bounded state
+    # closes the "replay the same cookie forever" angle, but nothing
+    # otherwise stops a fresh /login+/callback pair being scripted at high
+    # volume (CLAUDE-SECURITY-RESULTS.md F16). Same shape as the login_ip
+    # rule above.
+    ("GET", "/dashboard/auth/oidc/login"): ("oidc_ip", 20, timedelta(minutes=15), True),
+    ("GET", "/dashboard/auth/oidc/callback"): ("oidc_ip", 20, timedelta(minutes=15), True),
 }
 _MAX_WINDOW = max(window for _, _, window, _count_on_success in _RULES.values())
 

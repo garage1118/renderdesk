@@ -23,6 +23,7 @@ from renderdesk.auth_scheme import ensure_auth_scheme
 from renderdesk.config import settings
 from renderdesk.db import Base, engine, session_scope
 from renderdesk.models import Connection, User, utcnow
+from renderdesk.oidc_state import _used_states as _oidc_used_states
 from renderdesk.rate_limit import _attempts as _rate_limit_attempts
 from renderdesk.session_auth import _failed_logins
 
@@ -57,6 +58,7 @@ def _reset_login_rate_limit():
     # 429-ing real logins partway through an unrelated test file.
     _failed_logins.clear()
     _rate_limit_attempts.clear()
+    _oidc_used_states.clear()
     yield
 
 

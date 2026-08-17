@@ -25,6 +25,7 @@ from renderdesk.db import engine, session_scope
 from renderdesk.mcp_server import mcp
 from renderdesk.oauth_consent_state import OAuthConsentBindingMiddleware
 from renderdesk.oauth_provider import oauth_provider, sweep_expired_oauth_rows
+from renderdesk.oidc_state import sweep_stale_used_states
 from renderdesk.rate_limit import RateLimitMiddleware, sweep_stale_attempts
 from renderdesk.security_headers import SecurityHeadersMiddleware
 from renderdesk.session_auth import sweep_expired_sessions, sweep_stale_failed_logins
@@ -81,6 +82,7 @@ async def _sweep_loop() -> None:
             await sweep_expired_sessions()
             sweep_stale_attempts()
             sweep_stale_failed_logins()
+            sweep_stale_used_states()
         except Exception:
             _logger.exception("sweep loop iteration failed")
 

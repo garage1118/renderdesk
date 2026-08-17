@@ -301,6 +301,54 @@ async def test_no_email_or_fallback_claims_rejected(client, idp):
     assert "renderdesk_session" not in resp.cookies
 
 
+async def test_state_cookie_cannot_be_replayed_for_a_second_callback(client, idp):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F16: a self-obtained state
+    # cookie used to fund an unlimited number of outbound token-exchange
+    # attempts (one per callback hit, each with a different `code`) since
+    # nothing marked it used. The second attempt with the same state must
+    # be rejected before ever reaching the token exchange.
+    priv_key, id_token_holder = idp
+    state, nonce = await _start_login(client)
+    id_token_holder["token"] = _sign_id_token(priv_key, nonce=nonce, email="replay@example.com")
+    # Captured before the first callback: a successful callback deletes the
+    # cookie client-side too, but an attacker who captured the raw value
+    # (or self-minted it) replays it directly rather than relying on a
+    # cookie jar, so the test does the same.
+    raw_state_cookie = client.cookies["renderdesk_oidc_state"]
+
+    first = await _callback(client, state)
+    assert first.status_code == 303
+
+    second = await client.get(
+        "/dashboard/auth/oidc/callback",
+        params={"code": "a-different-code", "state": state},
+        headers={"Cookie": f"renderdesk_oidc_state={raw_state_cookie}"},
+    )
+    assert second.status_code == 400
+    assert "renderdesk_session" not in second.cookies
+
+
+async def test_stale_state_cookie_is_rejected_server_side():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F16: the cookie's Max-Age is
+    # only enforced by a real browser — a scripted caller replaying the raw
+    # cookie value ignores it. The signed payload's own "iat" has to be
+    # checked server-side.
+    from renderdesk.oidc_state import OIDC_STATE_MAX_AGE, make_cookie_value
+
+    value = make_cookie_value("s1", "n1", "v1", "/dashboard")
+    body, sig = value.rsplit(".", 1)
+    import base64
+    import json
+
+    payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    payload["iat"] -= OIDC_STATE_MAX_AGE + 1
+    from renderdesk.oidc_state import _sign
+
+    stale_payload = json.dumps(payload).encode()
+    stale_value = base64.urlsafe_b64encode(stale_payload).decode().rstrip("=") + "." + _sign(stale_payload)
+    assert read_cookie_value(stale_value) is None
+
+
 async def test_login_bounces_back_to_next_param(client, idp):
     priv_key, id_token_holder = idp
     state, nonce = await _start_login(client, next_path="/dashboard/connections")
@@ -456,7 +504,8 @@ def test_state_cookie_round_trip():
 
     value = make_cookie_value("s1", "n1", "v1", "/dashboard")
     decoded = read_cookie_value(value)
-    assert decoded == {"s": "s1", "n": "n1", "v": "v1", "next": "/dashboard"}
+    assert decoded is not None
+    assert {k: v for k, v in decoded.items() if k != "iat"} == {"s": "s1", "n": "n1", "v": "v1", "next": "/dashboard"}
 
 
 def test_state_cookie_tampered_payload_rejected():
