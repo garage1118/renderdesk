@@ -1,9 +1,11 @@
+import uuid
 from datetime import timedelta
 
 from sqlalchemy import select
 
 from renderdesk.db import session_scope
-from renderdesk.models import Session, User, utcnow
+from renderdesk.models import OAuthAuthorizationCode, OAuthClient, Session, User, utcnow
+from renderdesk.oauth_provider import UNUSED_CLIENT_TTL, sweep_expired_oauth_rows
 from renderdesk.rate_limit import _attempts, is_rate_limited, record_attempt, sweep_stale_attempts
 from renderdesk.session_auth import (
     _LOGIN_LOCKOUT_WINDOW,
@@ -111,3 +113,64 @@ def test_failed_login_sweep_never_clears_an_active_lockout():
     sweep_stale_failed_logins()
 
     assert is_login_rate_limited("locked@example.com")
+
+
+async def test_oauth_sweep_does_not_delete_old_client_with_unexpired_pending_code():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F14: a client old enough to
+    # be swept can still have an *unexpired* pending authorization code —
+    # /authorize creates one on every hit, unauthenticated, with its own
+    # independent 10-minute expiry — so deleting the client used to violate
+    # the foreign key and raise, killing the sweep loop for good.
+    client_id = f"old-client-{uuid.uuid4()}"
+    async with session_scope() as session:
+        session.add(
+            OAuthClient(
+                client_id=client_id,
+                metadata_json={"client_id": client_id, "redirect_uris": ["https://client.example/cb"]},
+                created_at=utcnow() - UNUSED_CLIENT_TTL - timedelta(days=1),
+            )
+        )
+        await session.commit()
+    async with session_scope() as session:
+        session.add(
+            OAuthAuthorizationCode(
+                id=str(uuid.uuid4()),
+                client_id=client_id,
+                user_id=None,
+                redirect_uri="https://client.example/cb",
+                code_challenge="challenge",
+                approved=False,
+                code_hash=None,
+                expires_at=utcnow() + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    await sweep_expired_oauth_rows()  # must not raise
+
+    async with session_scope() as session:
+        client = (
+            await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+        ).scalar_one_or_none()
+    assert client is not None  # still referenced, so not swept yet
+
+
+async def test_oauth_sweep_deletes_old_unused_client_with_no_references():
+    client_id = f"abandoned-client-{uuid.uuid4()}"
+    async with session_scope() as session:
+        session.add(
+            OAuthClient(
+                client_id=client_id,
+                metadata_json={"client_id": client_id, "redirect_uris": ["https://client.example/cb"]},
+                created_at=utcnow() - UNUSED_CLIENT_TTL - timedelta(days=1),
+            )
+        )
+        await session.commit()
+
+    await sweep_expired_oauth_rows()
+
+    async with session_scope() as session:
+        client = (
+            await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+        ).scalar_one_or_none()
+    assert client is None

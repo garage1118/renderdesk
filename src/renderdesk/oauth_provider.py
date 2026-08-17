@@ -366,16 +366,29 @@ async def sweep_expired_oauth_rows() -> None:
     homelab SQLite file (see DESIGN_NOTES.md). Deletes codes/refresh tokens
     before clients so an unused client is never removed while a (necessarily
     also-expired, since it was never converted into a Connection) row still
-    references it — relevant now that PRAGMA foreign_keys is enforced."""
+    references it — relevant now that PRAGMA foreign_keys is enforced.
+
+    Excludes clients with *any* remaining authorization-code or
+    refresh-token row, not just expired ones: a client selected for
+    deletion (old enough, never converted to a Connection) can still have
+    an *unexpired* pending authorization code — /authorize creates one on
+    every hit, including unauthenticated ones, with its own independent
+    10-minute expiry — so "no expired rows reference it" doesn't imply "no
+    rows reference it". Deleting it anyway violated the foreign key and
+    used to raise IntegrityError (CLAUDE-SECURITY-RESULTS.md F14)."""
     now = utcnow()
     async with session_scope() as session:
         await session.execute(delete(OAuthAuthorizationCodeRow).where(OAuthAuthorizationCodeRow.expires_at <= now))
         await session.execute(delete(OAuthRefreshTokenRow).where(OAuthRefreshTokenRow.expires_at <= now))
         used_client_ids = select(Connection.client_id).where(Connection.client_id.is_not(None)).distinct()
+        referenced_client_ids = select(OAuthAuthorizationCodeRow.client_id).distinct()
+        refresh_referenced_client_ids = select(OAuthRefreshTokenRow.client_id).distinct()
         await session.execute(
             delete(OAuthClient).where(
                 OAuthClient.created_at <= now - UNUSED_CLIENT_TTL,
                 OAuthClient.client_id.not_in(used_client_ids),
+                OAuthClient.client_id.not_in(referenced_client_ids),
+                OAuthClient.client_id.not_in(refresh_referenced_client_ids),
             )
         )
         await session.commit()

@@ -71,10 +71,18 @@ async def _sweep_loop() -> None:
     #    they'd otherwise grow without bound for the process's lifetime.
     while True:
         await asyncio.sleep(_SWEEP_INTERVAL.total_seconds())
-        await sweep_expired_oauth_rows()
-        await sweep_expired_sessions()
-        sweep_stale_attempts()
-        sweep_stale_failed_logins()
+        # One failing sweep must never end this loop permanently — with no
+        # try/except here, an exception from any call below (e.g. F14's
+        # OAuthClient foreign-key violation) used to propagate out of the
+        # task and kill it for the rest of the process's life, silently
+        # leaving nothing to prune any of this ever again.
+        try:
+            await sweep_expired_oauth_rows()
+            await sweep_expired_sessions()
+            sweep_stale_attempts()
+            sweep_stale_failed_logins()
+        except Exception:
+            _logger.exception("sweep loop iteration failed")
 
 
 @asynccontextmanager
