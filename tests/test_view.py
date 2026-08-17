@@ -2,6 +2,7 @@ import json
 
 import httpx
 import pytest
+from pygments.formatters import HtmlFormatter
 
 from renderdesk import tools
 from renderdesk.app import app
@@ -54,6 +55,23 @@ async def test_markdown_artifact_is_sanitized(client):
 async def test_unknown_artifact_id_is_404(client):
     resp = await client.get("/a/does-not-exist")
     assert resp.status_code == 404
+
+
+async def test_render_highlighted_source_uses_a_fresh_formatter_per_call():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F11: the pinned Pygments
+    # version's HtmlFormatter carries a class-level, per-instance-keyed
+    # lru_cache that retains every distinct highlighted token text it's
+    # ever seen. A module-level singleton formatter never gets garbage
+    # collected, so nothing about it (or entries keyed on it) is ever
+    # collectable independent of the cache's own eviction. Building a new
+    # formatter per call means no code path holds a formatter alive longer
+    # than the single render it's used for.
+    from renderdesk.view import _new_pygments_formatter
+
+    first = _new_pygments_formatter()
+    second = _new_pygments_formatter()
+    assert first is not second
+    assert isinstance(first, HtmlFormatter)
 
 
 async def test_code_artifact_is_syntax_highlighted(client):

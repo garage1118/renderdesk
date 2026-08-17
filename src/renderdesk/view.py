@@ -300,9 +300,9 @@ _THEME_SCRIPT = '<script src="/static/theme.js"></script>'
 # (the token->class mapping is fixed regardless of which formatter's style
 # generates the markup, so either formatter works for the highlight() call
 # itself).
-_pygments_formatter = HtmlFormatter(nowrap=True, style="monokai")
+_PYGMENTS_DARK_STYLE_NAME = "monokai"
 _PYGMENTS_LIGHT_STYLE = HtmlFormatter(nowrap=True, style="friendly")
-_PYGMENTS_DARK_STYLE = _pygments_formatter
+_PYGMENTS_DARK_STYLE = HtmlFormatter(nowrap=True, style=_PYGMENTS_DARK_STYLE_NAME)
 _PYGMENTS_CLASSES = set(STANDARD_TYPES.values())
 _PYGMENTS_CSS = (
     "<style>.codehilite{background:var(--surface-2);color:var(--text);padding:1rem;"
@@ -311,6 +311,22 @@ _PYGMENTS_CSS = (
     + _PYGMENTS_DARK_STYLE.get_style_defs('html[data-theme="dark"] .codehilite')
     + "</style>"
 )
+# _PYGMENTS_LIGHT_STYLE/_PYGMENTS_DARK_STYLE above are only ever used for
+# get_style_defs() at import time — never passed to highlight() — so
+# they're safe as long-lived singletons. A formatter actually used to
+# highlight *content*, by contrast, must never be reused across requests:
+# the pinned Pygments version's HtmlFormatter carries a per-instance
+# functools.lru_cache(maxsize=100) on the method highlight() calls per
+# token, keyed on (self, token_text), so a shared instance retains every
+# distinct attacker-supplied token string (and its escaped HTML) for the
+# life of the process — roughly 15MB per large entry, measured (see
+# CLAUDE-SECURITY-RESULTS.md F11). Building a fresh formatter per call
+# means that cache dies with the formatter right after the call, instead
+# of accumulating.
+
+
+def _new_pygments_formatter() -> HtmlFormatter:
+    return HtmlFormatter(nowrap=True, style=_PYGMENTS_DARK_STYLE_NAME)
 
 
 def render_highlighted_source(content: str, language: str | None) -> tuple[str, str]:
@@ -329,7 +345,7 @@ def render_highlighted_source(content: str, language: str | None) -> tuple[str, 
             lexer = None
 
     if lexer is not None:
-        highlighted = highlight(content, lexer, _pygments_formatter)
+        highlighted = highlight(content, lexer, _new_pygments_formatter())
         return f'<pre class="codehilite"><code>{highlighted}</code></pre>', _PYGMENTS_CSS
     return f"<pre>{html_escape.escape(content)}</pre>", ""
 
@@ -437,7 +453,7 @@ def _fence_with_extras(
             lexer = None
         if lexer is not None:
             env["has_code_block"] = True
-            highlighted = highlight(token.content, lexer, _pygments_formatter)
+            highlighted = highlight(token.content, lexer, _new_pygments_formatter())
             return f'<pre class="codehilite"><code>{highlighted}</code></pre>\n'
 
     return RendererHTML.fence(self, tokens, idx, options, env)
