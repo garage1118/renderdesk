@@ -380,7 +380,13 @@ async def oauth_consent_form(request: Request, request_id: str, user: User = Dep
         client_row = (
             await session.execute(select(OAuthClient).where(OAuthClient.client_id == row.client_id))
         ).scalar_one_or_none()
-    client_name = (client_row.metadata_json.get("client_name") if client_row else None) or row.client_id
+    # Registrant-supplied and unverified (see the template's own note next
+    # to it) — truncated because /register has no length cap on
+    # client_name beyond oauth_provider's overall metadata-size limit
+    # (CLAUDE-SECURITY-RESULTS.md F9), and this is the one place that
+    # value reaches a human as opposed to just sitting in a DB row.
+    raw_client_name = (client_row.metadata_json.get("client_name") if client_row else None) or row.client_id
+    client_name = raw_client_name[:100]
     redirect_host = urlparse(row.redirect_uri).netloc
     return templates.TemplateResponse(
         request,
@@ -389,7 +395,6 @@ async def oauth_consent_form(request: Request, request_id: str, user: User = Dep
             "request_id": request_id,
             "client_name": client_name,
             "redirect_host": redirect_host,
-            "scope": row.scope,
             "user": user,
         },
     )

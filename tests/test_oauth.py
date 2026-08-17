@@ -342,6 +342,49 @@ async def test_mcp_request_body_over_the_hard_cap_is_rejected():
     assert resp.status_code == 413
 
 
+async def test_consent_page_does_not_advertise_an_unenforced_scope(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F20: the consent screen
+    # used to render the registrant-supplied scope string as if it were a
+    # real limit, even though nothing downstream enforces scope at all.
+    user_id = await make_user(email="consent-scope@example.com", password="pw123456")
+    await _login(client, "consent-scope@example.com", "pw123456")
+    client_id = await _register_client(client)
+    verifier, challenge = _make_pkce_pair()
+
+    resp = await client.get(
+        "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "xyz",
+            "scope": "mcp",
+        },
+    )
+    request_id = parse_qs(urlparse(resp.headers["location"]).query)["request_id"][0]
+    page = await client.get("/oauth/consent", params={"request_id": request_id})
+    assert "scope:" not in page.text.lower()
+    assert "not verified" in page.text
+    assert user_id  # sanity: fixture wiring didn't silently no-op
+
+
+async def test_register_rejects_a_scope_outside_the_valid_set(client):
+    resp = await client.post(
+        "/register",
+        json={
+            "redirect_uris": [REDIRECT_URI],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "artifacts:read",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_client_metadata"
+
+
 async def test_consent_binding_cookie_only_stamped_from_authorize_route():
     # Regression for CLAUDE-SECURITY-RESULTS.md F22: the binding cookie
     # used to be stamped for *any* response redirecting to

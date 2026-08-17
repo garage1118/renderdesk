@@ -160,7 +160,18 @@ app.router.routes.extend(
     create_auth_routes(
         provider=oauth_provider,
         issuer_url=AnyHttpUrl(settings.public_base_url),
-        client_registration_options=ClientRegistrationOptions(enabled=True),
+        # "mcp" is the only scope that means anything today — the whole
+        # tool surface is one undifferentiated capability level, nothing
+        # enforces finer-grained access (see DESIGN_NOTES.md: real scope
+        # enforcement is future work, not something to half-build here).
+        # valid_scopes still matters now: without it a registrant can
+        # claim any scope string it likes, and the consent screen used to
+        # render that string as if it meant something
+        # (CLAUDE-SECURITY-RESULTS.md F20) — the template no longer shows
+        # it, but this keeps a registered client's own metadata honest too.
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True, valid_scopes=["mcp"], default_scopes=["mcp"]
+        ),
         revocation_options=RevocationOptions(enabled=True),
     )
 )
