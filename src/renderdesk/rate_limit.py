@@ -53,7 +53,28 @@ _RULES: dict[tuple[str, str], tuple[str, int, timedelta, bool]] = {
     ("GET", "/dashboard/auth/oidc/login"): ("oidc_ip", 20, timedelta(minutes=15), True),
     ("GET", "/dashboard/auth/oidc/callback"): ("oidc_ip", 20, timedelta(minutes=15), True),
 }
-_MAX_WINDOW = max(window for _, _, window, _count_on_success in _RULES.values())
+# Comment/reply/resolve/delete routes carry no per-path rule above: the
+# path contains a variable {artifact_id} or {comment_id}, unlike every
+# fixed path in _RULES, so they're matched by a predicate instead of an
+# exact (method, path) key. Authenticated (a dashboard session is
+# required), but comments.py's per-artifact byte/count quota is enforced
+# independent of who's writing — including a share recipient who never
+# owns the artifact — so a coarse per-IP throttle on top bounds how fast
+# one caller can spend that budget (CLAUDE-SECURITY-RESULTS.md F19).
+_COMMENT_ROUTE_RULE = ("comment_ip", 30, timedelta(minutes=5), True)
+
+
+def _is_comment_route(method: str, path: str) -> bool:
+    if method != "POST":
+        return False
+    if path.startswith("/dashboard/comments/"):
+        return True
+    return path.startswith("/dashboard/a/") and path.endswith("/comments")
+
+
+_MAX_WINDOW = max(
+    [window for _, _, window, _count_on_success in _RULES.values()] + [_COMMENT_ROUTE_RULE[2]]
+)
 
 
 def sweep_stale_attempts() -> int:
@@ -95,6 +116,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         rule = _RULES.get((request.method, request.url.path))
+        if rule is None and _is_comment_route(request.method, request.url.path):
+            rule = _COMMENT_ROUTE_RULE
         if rule is None:
             return await call_next(request)
 

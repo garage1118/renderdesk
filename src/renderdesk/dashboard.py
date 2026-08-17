@@ -687,6 +687,22 @@ async def dashboard_resolve(
     return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
 
 
+@router.post("/dashboard/comments/{comment_id}/delete", dependencies=[Depends(verify_csrf)])
+async def dashboard_delete_comment_thread(
+    comment_id: str, artifact_id: str = Form(...), user: User = Depends(require_current_user)
+):
+    # Owner-only, unlike resolve/reply above — see comments.delete_thread's
+    # docstring. Gives the owner a way to reclaim space a share recipient
+    # spent without deleting the whole artifact (CLAUDE-SECURITY-RESULTS.md
+    # F19).
+    async with session_scope() as session:
+        try:
+            await comments.delete_thread(session, user.id, artifact_id, comment_id)
+        except NotFoundError:
+            raise HTTPException(status_code=404) from None
+    return RedirectResponse(url=f"/dashboard/a/{artifact_id}", status_code=303)
+
+
 async def _connections_context(user: User) -> dict:
     async with session_scope() as session:
         rows = (

@@ -1,12 +1,20 @@
 import uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from renderdesk.config import settings
 from renderdesk.models import Artifact, ArtifactShare, Comment, Connection, User
-from renderdesk.tools import NotFoundError, get_owned_artifact
+from renderdesk.quotas import QuotaExceededError
+from renderdesk.tools import NotFoundError, get_owned_artifact, get_owned_artifact_by_user
 
 MAX_COMMENT_BYTES = 100_000
+
+# Newest-first, capped: an artifact's comment page renders every thread
+# root with no LIMIT otherwise, so a large enough thread count makes the
+# page itself the resource-exhaustion vector regardless of the per-comment
+# size cap (CLAUDE-SECURITY-RESULTS.md F19).
+MAX_DASHBOARD_THREADS = 200
 
 
 class CommentTooLargeError(Exception):
@@ -16,6 +24,32 @@ class CommentTooLargeError(Exception):
 def _check_body_size(body: str) -> None:
     if len(body.encode()) > MAX_COMMENT_BYTES:
         raise CommentTooLargeError(f"invalid: comment body exceeds {MAX_COMMENT_BYTES} bytes")
+
+
+async def _check_artifact_comment_quota(session: AsyncSession, artifact_id: str, body: str) -> None:
+    """Bounds total comment storage per artifact — see max_comments_per_
+    artifact's definition in config.py for why this can't reuse the
+    connection/user byte quota. The writer need not own the artifact (a
+    share recipient can comment), so this deliberately checks the
+    artifact's own totals rather than the caller's."""
+    count, total_bytes = (
+        await session.execute(
+            select(func.count(Comment.id), func.coalesce(func.sum(func.length(Comment.body)), 0)).where(
+                Comment.artifact_id == artifact_id
+            )
+        )
+    ).one()
+    if count >= settings.max_comments_per_artifact:
+        raise QuotaExceededError(
+            f"quota_exceeded: artifact already has {count} comments, "
+            f"max is {settings.max_comments_per_artifact}"
+        )
+    new_bytes = len(body.encode())
+    if total_bytes + new_bytes > settings.max_comment_bytes_per_artifact:
+        raise QuotaExceededError(
+            f"quota_exceeded: artifact's comments would total {total_bytes + new_bytes} bytes, "
+            f"max is {settings.max_comment_bytes_per_artifact} bytes"
+        )
 
 
 async def _author_names(session: AsyncSession, rows: list[Comment]) -> tuple[dict[str, str], dict[str, str | None]]:
@@ -159,6 +193,7 @@ async def list_comments(
 async def reply_to_comment(session: AsyncSession, connection_id: str, comment_id: str, body: str) -> dict:
     _check_body_size(body)
     root = await _get_connection_owned_thread_root(session, connection_id, comment_id)
+    await _check_artifact_comment_quota(session, root.artifact_id, body)
     reply = Comment(
         id=str(uuid.uuid4()),
         artifact_id=root.artifact_id,
@@ -226,7 +261,9 @@ async def list_comments_for_dashboard(session: AsyncSession, user: User, artifac
         await session.execute(
             select(Comment)
             .where(Comment.artifact_id == artifact_id, Comment.parent_id.is_(None))
-            .order_by(Comment.created_at)
+            # Newest first, capped — see MAX_DASHBOARD_THREADS.
+            .order_by(Comment.created_at.desc())
+            .limit(MAX_DASHBOARD_THREADS)
         )
     ).scalars().all()
     return await _serialize_threads(session, roots)
@@ -235,6 +272,7 @@ async def list_comments_for_dashboard(session: AsyncSession, user: User, artifac
 async def create_comment(session: AsyncSession, user: User, artifact_id: str, body: str) -> dict:
     _check_body_size(body)
     await get_accessible_artifact(session, user.id, artifact_id)
+    await _check_artifact_comment_quota(session, artifact_id, body)
     root = Comment(id=str(uuid.uuid4()), artifact_id=artifact_id, author_user_id=user.id, body=body)
     session.add(root)
     await session.commit()
@@ -244,6 +282,7 @@ async def create_comment(session: AsyncSession, user: User, artifact_id: str, bo
 async def reply_as_human(session: AsyncSession, user: User, comment_id: str, body: str) -> dict:
     _check_body_size(body)
     root = await _get_accessible_thread_root(session, user.id, comment_id)
+    await _check_artifact_comment_quota(session, root.artifact_id, body)
     reply = Comment(
         id=str(uuid.uuid4()), artifact_id=root.artifact_id, parent_id=root.id, author_user_id=user.id, body=body
     )
@@ -257,3 +296,24 @@ async def toggle_resolved(session: AsyncSession, user: User, comment_id: str) ->
     root.resolved = not root.resolved
     await session.commit()
     return {"thread_id": root.id, "resolved": root.resolved}
+
+
+async def delete_thread(session: AsyncSession, user_id: str, artifact_id: str, comment_id: str) -> None:
+    """Dashboard-only, owner-only (unlike toggle_resolved/reply_as_human,
+    which a share recipient can also reach) — the whole point is giving the
+    artifact *owner* a way to reclaim space a recipient spent, without
+    deleting the entire artifact (CLAUDE-SECURITY-RESULTS.md F19). Deletes
+    the thread root and every reply under it."""
+    await get_owned_artifact_by_user(session, user_id, artifact_id)
+    root = (
+        await session.execute(
+            select(Comment).where(
+                Comment.id == comment_id, Comment.artifact_id == artifact_id, Comment.parent_id.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if root is None:
+        raise NotFoundError(f"not_found: no comment thread {comment_id}")
+    await session.execute(delete(Comment).where(Comment.parent_id == root.id))
+    await session.delete(root)
+    await session.commit()

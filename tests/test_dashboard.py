@@ -262,6 +262,34 @@ async def test_comment_posted_via_dashboard_is_visible_to_mcp_and_vice_versa(cli
     assert "dave@example.com" in detail_resp.text
 
 
+async def test_owner_can_delete_a_comment_thread_via_dashboard(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F19: comments had no
+    # individual delete path — an owner could only reclaim space by
+    # deleting the whole artifact.
+    user_id = await make_user(email="threadowner@example.com", password="correct-horse")
+    connection_id = await make_connection(user_id=user_id)
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, "hello", "markdown")
+    artifact_id = published["artifact_id"]
+
+    await _login(client, "threadowner@example.com", "correct-horse")
+    comment_resp = await _post(client, f"/dashboard/a/{artifact_id}/comments", data={"body": "delete me"})
+    assert comment_resp.status_code == 303
+
+    async with session_scope() as session:
+        threads = await comments.list_comments(session, connection_id, artifact_id)
+    thread_id = threads[0]["thread_id"]
+
+    delete_resp = await _post(
+        client, f"/dashboard/comments/{thread_id}/delete", data={"artifact_id": artifact_id}
+    )
+    assert delete_resp.status_code == 303
+
+    async with session_scope() as session:
+        threads_after = await comments.list_comments(session, connection_id, artifact_id)
+    assert threads_after == []
+
+
 async def test_shared_artifact_shows_up_for_recipient_but_not_via_their_mcp_connection(client):
     owner_id = await make_user(email="owner@example.com", password="owner-pass")
     owner_connection = await make_connection(user_id=owner_id)

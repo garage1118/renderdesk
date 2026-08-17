@@ -95,6 +95,13 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
             <button type="submit" class="btn btn-sm">{{ "Reopen" if thread.resolved else "Resolve" }}</button>
           </form>
+          {% if is_owner %}
+          <form method="post" action="/dashboard/comments/{{ thread.thread_id }}/delete">
+            <input type="hidden" name="artifact_id" value="{{ artifact.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+            <button type="submit" class="btn btn-sm">Delete</button>
+          </form>
+          {% endif %}
         </div>
       </div>
       {% else %}

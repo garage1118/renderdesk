@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     # count, inside the same quota_lock-held transaction as the write.
     max_versions_per_artifact: int = 20
 
+    # Comments are covered by no quota anywhere else: quotas.py only sums
+    # Artifact/ArtifactVersion bytes, and a share recipient (never the
+    # artifact owner) can write comments against someone else's artifact,
+    # so this can't reuse the connection/user byte quota above without
+    # letting one person's comments spend another's budget. Bounded per
+    # artifact instead — cheap to check, and it's the artifact whose page
+    # would otherwise grow unbounded (CLAUDE-SECURITY-RESULTS.md F19).
+    max_comments_per_artifact: int = 500
+    max_comment_bytes_per_artifact: int = 2_000_000
+
     session_expiry_days: int = 30
 
     # Only consumed by docker-entrypoint.sh (passed straight to uvicorn's

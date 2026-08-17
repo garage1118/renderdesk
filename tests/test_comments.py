@@ -1,9 +1,11 @@
 import pytest
 from sqlalchemy import select
 
-from renderdesk import comments, tools
+from renderdesk import comments, shares, tools
+from renderdesk.config import settings
 from renderdesk.db import session_scope
 from renderdesk.models import Connection, User
+from renderdesk.quotas import QuotaExceededError
 
 from .conftest import make_connection, make_user
 
@@ -173,3 +175,102 @@ async def test_unlabelled_connection_falls_back_to_a_stable_non_empty_name():
 
     assert reply["author"] == f"connection {connection_id[:8]}"
     assert reply["author_kind"] == "agent"
+
+
+async def test_comment_count_quota_is_enforced_per_artifact(monkeypatch):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F19: comments were counted
+    # against no quota at all — an owner or a share recipient could write
+    # unbounded rows against one artifact.
+    monkeypatch.setattr(settings, "max_comments_per_artifact", 2)
+    connection_id = await make_connection()
+    artifact_id = await _publish(connection_id)
+    user = await _user_for(connection_id)
+
+    async with session_scope() as session:
+        await comments.create_comment(session, user, artifact_id, "one")
+    async with session_scope() as session:
+        await comments.create_comment(session, user, artifact_id, "two")
+    async with session_scope() as session:
+        with pytest.raises(QuotaExceededError):
+            await comments.create_comment(session, user, artifact_id, "three")
+
+
+async def test_comment_byte_quota_is_enforced_per_artifact(monkeypatch):
+    monkeypatch.setattr(settings, "max_comment_bytes_per_artifact", 10)
+    connection_id = await make_connection()
+    artifact_id = await _publish(connection_id)
+    user = await _user_for(connection_id)
+
+    async with session_scope() as session:
+        with pytest.raises(QuotaExceededError):
+            await comments.create_comment(session, user, artifact_id, "way too long for the byte cap")
+
+
+async def test_share_recipient_comments_still_count_against_the_artifact_quota(monkeypatch):
+    # The quota is per-artifact, not per-writer, specifically because a
+    # share recipient — who never owns the artifact — can also write
+    # comments against it.
+    monkeypatch.setattr(settings, "max_comments_per_artifact", 1)
+    owner_connection = await make_connection(label="owner-conn")
+    artifact_id = await _publish(owner_connection)
+    owner = await _user_for(owner_connection)
+    recipient_id = await make_user(email="recipient@example.com")
+
+    async with session_scope() as session:
+        await shares.share_artifact_from_dashboard(session, owner.id, artifact_id, "recipient@example.com")
+    async with session_scope() as session:
+        recipient = (await session.execute(select(User).where(User.id == recipient_id))).scalar_one()
+
+    async with session_scope() as session:
+        await comments.create_comment(session, recipient, artifact_id, "from recipient")
+    async with session_scope() as session:
+        with pytest.raises(QuotaExceededError):
+            await comments.create_comment(session, owner, artifact_id, "from owner, over quota")
+
+
+async def test_dashboard_comment_listing_is_capped(monkeypatch):
+    monkeypatch.setattr(comments, "MAX_DASHBOARD_THREADS", 3)
+    connection_id = await make_connection()
+    artifact_id = await _publish(connection_id)
+    user = await _user_for(connection_id)
+
+    for i in range(5):
+        async with session_scope() as session:
+            await comments.create_comment(session, user, artifact_id, f"comment {i}")
+
+    async with session_scope() as session:
+        threads = await comments.list_comments_for_dashboard(session, user, artifact_id)
+    assert len(threads) == 3
+
+
+async def test_owner_can_delete_a_comment_thread():
+    connection_id = await make_connection()
+    artifact_id = await _publish(connection_id)
+    user = await _user_for(connection_id)
+
+    async with session_scope() as session:
+        root = await comments.create_comment(session, user, artifact_id, "delete me")
+        await comments.reply_to_comment(session, connection_id, root["thread_id"], "a reply")
+
+    async with session_scope() as session:
+        await comments.delete_thread(session, user.id, artifact_id, root["thread_id"])
+
+    async with session_scope() as session:
+        threads = await comments.list_comments_for_dashboard(session, user, artifact_id)
+    assert threads == []
+
+
+async def test_non_owner_cannot_delete_a_comment_thread():
+    owner_connection = await make_connection(label="owner-conn2")
+    artifact_id = await _publish(owner_connection)
+    owner = await _user_for(owner_connection)
+    recipient_id = await make_user(email="recipient2@example.com")
+
+    async with session_scope() as session:
+        await shares.share_artifact_from_dashboard(session, owner.id, artifact_id, "recipient2@example.com")
+    async with session_scope() as session:
+        owner_row = await comments.create_comment(session, owner, artifact_id, "owner's comment")
+
+    async with session_scope() as session:
+        with pytest.raises(tools.NotFoundError):
+            await comments.delete_thread(session, recipient_id, artifact_id, owner_row["thread_id"])
