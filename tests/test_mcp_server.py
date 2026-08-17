@@ -105,7 +105,11 @@ async def test_upload_large_artifact_prompt_renders_curl_recipe():
     assert "format:\"html\"" in text
     assert "title:\"Demo\"" in text
     assert "/mcp/" in text
-    assert "Mcp-Session-Id" in text
+    # Regression for CLAUDE-SECURITY-RESULTS.md F18: the token must never
+    # land in a curl argv — it's passed via -K/--config instead of -H.
+    assert "-H \"Authorization" not in text
+    assert "-K " in text
+    assert "mktemp" in text
     assert "__" not in text  # no leftover template placeholders
 
 
