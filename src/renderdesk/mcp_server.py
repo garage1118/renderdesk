@@ -21,7 +21,12 @@ _transport_security = TransportSecuritySettings(
     allowed_origins=[f"{_public_url.scheme}://{_public_url.netloc}"],
 )
 
-mcp = FastMCP("renderdesk", streamable_http_path="/", transport_security=_transport_security)
+mcp = FastMCP(
+    "renderdesk",
+    streamable_http_path="/",
+    transport_security=_transport_security,
+    stateless_http=True,
+)
 
 
 @mcp.tool()
