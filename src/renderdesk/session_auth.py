@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import bcrypt
 from fastapi import HTTPException, Request
@@ -133,15 +133,27 @@ def safe_next_path(path: str) -> str:
     # all(c.isprintable()...) is defense in depth against embedded CRLF/
     # control characters reaching a Location header, on top of whatever
     # Starlette already rejects.
+    #
+    # A run of *any* number of leading slashes is rejected, not just
+    # exactly two: urlparse('///evil.com') reports scheme='' and
+    # netloc='' (it only recognizes an authority after precisely "//"),
+    # so scheme/netloc alone let "///evil.com" and "////evil.com" through
+    # unchanged — and the WHATWG URL spec's special-authority-ignore-
+    # slashes state means a browser resolves any of those against a
+    # Location header the same way it resolves "//evil.com".
     parsed = urlparse(path)
     if (
         not parsed.scheme
         and not parsed.netloc
         and path.startswith("/")
+        and not path.startswith("//")
         and "\\" not in path
         and all(c.isprintable() for c in path)
     ):
-        return path
+        # Re-serialize from the parsed path/query rather than returning the
+        # attacker-influenced raw string verbatim — belt-and-braces against
+        # any other parsing quirk the checks above didn't anticipate.
+        return urlunparse(("", "", parsed.path, "", parsed.query, ""))
     return "/dashboard"
 
 

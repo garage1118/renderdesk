@@ -21,6 +21,17 @@ def test_safe_next_path_rejects_crlf_and_control_chars():
     assert safe_next_path("/dashboard/a/x") == "/dashboard/a/x"
 
 
+def test_safe_next_path_rejects_extra_leading_slashes():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F4: urlparse('///evil.com')
+    # reports empty scheme/netloc (it only recognizes an authority after
+    # exactly "//"), so those checks alone let this through as an open
+    # redirect — browsers still resolve the extra slashes away and treat
+    # evil.com as the host.
+    assert safe_next_path("///evil.com") == "/dashboard"
+    assert safe_next_path("////evil.com") == "/dashboard"
+    assert safe_next_path("/\\/evil.com") == "/dashboard"
+
+
 async def test_resolve_session_deletes_expired_row():
     user_id = await make_user(email="expired-session@example.com")
     async with session_scope() as session:
