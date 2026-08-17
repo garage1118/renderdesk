@@ -32,15 +32,27 @@ def upgrade() -> None:
     #   slow run delays the container becoming healthy rather than failing
     #   it. If it ever grows slow enough to matter, prune version history
     #   from the dashboard first, then deploy.
-    # - It is idempotent and safe to re-run: the WHERE clause only touches
-    #   rows that are still NULL.
+    # - Re-runnable end to end, including the schema change: an upgrade
+    #   interrupted between add_column committing (pysqlite commits DDL as
+    #   it runs, ahead of the UPDATE and alembic's own version-bump commit)
+    #   and the final commit used to leave a host wedged forever — every
+    #   subsequent boot hit "duplicate column name: byte_size" and never
+    #   got further (CLAUDE-SECURITY-RESULTS.md F17). add_column is now
+    #   skipped if the column is already there, so a retried upgrade — from
+    #   either a genuine interruption or Alembic recording the migration as
+    #   already applied but the column already existing some other way —
+    #   just runs the backfill. The UPDATE's own WHERE clause only touches
+    #   rows that are still NULL, so it's idempotent on its own already.
     #
     # Backfilling (rather than leaving legacy rows NULL and computing at
     # read time) is the whole point: the read path this feeds —
     # versions.list_versions — exists to stop loading content, and a NULL
     # fallback would keep loading it for exactly the old rows that made
     # the page slow.
-    op.add_column("artifact_versions", sa.Column("byte_size", sa.Integer(), nullable=True))
+    bind = op.get_bind()
+    existing_columns = {col["name"] for col in sa.inspect(bind).get_columns("artifact_versions")}
+    if "byte_size" not in existing_columns:
+        op.add_column("artifact_versions", sa.Column("byte_size", sa.Integer(), nullable=True))
 
     # length(CAST(x AS BLOB)) is SQLite's byte length; bare length() on
     # TEXT counts characters, which would understate any non-ASCII content
