@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    RegistrationError,
     TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -37,6 +39,16 @@ UNUSED_CLIENT_TTL = timedelta(days=30)
 _connection_creation_locks: dict[tuple[str | None, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 AUTHORIZATION_CODE_TTL = timedelta(minutes=10)
 
+# /register is unauthenticated (RFC 7591 dynamic client registration) and
+# the SDK's model puts no upper bound on any field — client_name has no
+# max_length, redirect_uris/contacts have no item count, jwks is typed
+# Any. Without this, one POST persists whatever size document is sent
+# (CLAUDE-SECURITY-RESULTS.md F9). A few KB is generous for real client
+# metadata; this is checked against the serialized document, not any
+# single field, so it also bounds redirect_uris/contacts list length and
+# jwks in one place.
+_MAX_CLIENT_METADATA_BYTES = 8192
+
 
 def _ts(dt: datetime) -> float:
     # Naive-but-UTC (see models.utcnow) — attach tzinfo explicitly rather
@@ -55,11 +67,18 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
             return OAuthClientInformationFull.model_validate(row.metadata_json)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        metadata = client_info.model_dump(mode="json")
+        metadata_bytes = len(json.dumps(metadata).encode())
+        if metadata_bytes > _MAX_CLIENT_METADATA_BYTES:
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description=f"client metadata exceeds {_MAX_CLIENT_METADATA_BYTES} bytes",
+            )
         async with session_scope() as session:
             session.add(
                 OAuthClient(
                     client_id=client_info.client_id,
-                    metadata_json=client_info.model_dump(mode="json"),
+                    metadata_json=metadata,
                     created_at=utcnow(),
                 )
             )

@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 
 from renderdesk.auth import MCPAuthMiddleware
 from renderdesk.auth_scheme import ensure_auth_scheme
+from renderdesk.body_limits import MaxBodySizeMiddleware
 from renderdesk.config import settings
 from renderdesk.csrf import CSRFCookieMiddleware
 from renderdesk.dashboard import router as dashboard_router
@@ -120,6 +121,23 @@ app.add_middleware(CSRFCookieMiddleware)
 app.add_middleware(OAuthConsentBindingMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# Added last so it ends up outermost (see MaxBodySizeMiddleware's
+# docstring) — rejects an oversized body before any other middleware, or
+# the MCP SDK/OAuth registration handler underneath, ever buffers it.
+# /mcp's ceiling is a multiple of max_bytes_per_artifact rather than equal
+# to it: the documented upload_large_artifact workflow streams content
+# straight at /mcp inside a JSON-RPC envelope, which adds overhead beyond
+# the raw artifact bytes. /register's is independent of artifact size —
+# oauth_provider._MAX_CLIENT_METADATA_BYTES bounds the persisted
+# metadata; this just has to comfortably clear that plus JSON framing so
+# real registrations are never rejected here first.
+app.add_middleware(
+    MaxBodySizeMiddleware,
+    limits=[
+        ("/mcp", 4 * settings.max_bytes_per_artifact),
+        ("/register", 32_768),
+    ],
+)
 app.include_router(view_router)
 app.include_router(dashboard_router)
 app.mount("/mcp", MCPAuthMiddleware(_mcp_asgi_app))

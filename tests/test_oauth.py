@@ -293,3 +293,50 @@ async def test_missing_or_unknown_token_is_unauthorized():
 
     status, _, _ = await _through_mcp_auth_middleware("not-a-real-token")
     assert status == 401
+
+
+async def test_oversized_client_registration_is_rejected(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F9: /register is
+    # unauthenticated and the SDK's model puts no upper bound on
+    # client_name, so a huge value used to be persisted verbatim.
+    resp = await client.post(
+        "/register",
+        json={
+            "client_name": "x" * 20_000,
+            "redirect_uris": [REDIRECT_URI],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_client_metadata"
+
+
+async def test_register_request_body_over_the_hard_cap_is_rejected(client):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F9/F10: MaxBodySizeMiddleware
+    # should reject a body far too large for legitimate RFC 7591 metadata
+    # before it's ever buffered or JSON-parsed.
+    resp = await client.post(
+        "/register",
+        content=b"x" * 100_000,
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 413
+
+
+async def test_mcp_request_body_over_the_hard_cap_is_rejected():
+    from renderdesk.config import settings
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as c:
+        resp = await c.post(
+            "/mcp/",
+            content=b"x" * (4 * settings.max_bytes_per_artifact + 1),
+            headers={
+                "content-type": "application/json",
+                "accept": "application/json, text/event-stream",
+                "authorization": "Bearer not-a-real-token",
+            },
+        )
+    assert resp.status_code == 413
