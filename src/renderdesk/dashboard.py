@@ -244,7 +244,19 @@ async def oidc_callback(
 
     issuer, subject = claims["iss"], claims["sub"]
     claimed_email = claims.get("email")
-    email_verified = bool(claims.get("email_verified"))
+    # OIDC defines email_verified as a JSON boolean, but some IdPs (often
+    # ones fronting SAML/LDAP) emit the strings "true"/"false" instead —
+    # bool("false") is True, which used to let an explicitly-unverified
+    # email claim silently gate the same trusted-email path a real
+    # verified claim does (CLAUDE-SECURITY-RESULTS.md F15). A present but
+    # non-boolean claim is treated as malformed and fails the login
+    # outright, rather than silently downgrading it to "unverified" and
+    # continuing — a non-compliant claim shape is itself suspicious enough
+    # not to guess at.
+    email_verified_claim = claims.get("email_verified")
+    if email_verified_claim is not None and not isinstance(email_verified_claim, bool):
+        return _fail("Sign-in failed: the identity provider returned an invalid email_verified claim.")
+    email_verified = email_verified_claim is True
     # Display-only fallback for provisioning a brand-new account — never
     # used to match against an existing one (see oidc.py for why).
     display_fallback = claims.get("preferred_username") or claims.get("upn")

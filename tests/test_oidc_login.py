@@ -251,6 +251,47 @@ async def test_missing_email_and_preferred_username_falls_back_to_upn(client, id
         assert user is not None
 
 
+async def test_string_email_verified_false_does_not_count_as_verified(client, idp):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F15: bool("false") is True,
+    # so a non-compliant IdP emitting the *string* "false" used to let an
+    # explicitly-unverified email claim take the verified-email collision
+    # path anyway — that path is what blocks silently pre-registering an
+    # account keyed to someone else's address. A non-boolean claim must
+    # fail the login outright rather than being silently coerced.
+    priv_key, id_token_holder = idp
+    existing_user_id = await make_user(email="already-here2@example.com", password="somepassword")
+
+    state, nonce = await _start_login(client)
+    id_token_holder["token"] = _sign_id_token(
+        priv_key, nonce=nonce, sub="sub-string-false", email="already-here2@example.com", email_verified="false"
+    )
+    resp = await _callback(client, state)
+    assert resp.status_code == 400
+    assert "renderdesk_session" not in resp.cookies
+
+    async with session_scope() as session:
+        identity = (
+            await session.execute(select(OidcIdentity).where(OidcIdentity.subject == "sub-string-false"))
+        ).scalar_one_or_none()
+        assert identity is None
+        users = (
+            await session.execute(select(User).where(User.email == "already-here2@example.com"))
+        ).scalars().all()
+        assert len(users) == 1
+        assert users[0].id == existing_user_id
+
+
+async def test_string_email_verified_true_also_rejected_as_non_boolean(client, idp):
+    priv_key, id_token_holder = idp
+    state, nonce = await _start_login(client)
+    id_token_holder["token"] = _sign_id_token(
+        priv_key, nonce=nonce, sub="sub-string-true", email="stringtrue@example.com", email_verified="true"
+    )
+    resp = await _callback(client, state)
+    assert resp.status_code == 400
+    assert "renderdesk_session" not in resp.cookies
+
+
 async def test_no_email_or_fallback_claims_rejected(client, idp):
     priv_key, id_token_holder = idp
     state, nonce = await _start_login(client)
