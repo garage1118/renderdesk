@@ -340,3 +340,36 @@ async def test_mcp_request_body_over_the_hard_cap_is_rejected():
             },
         )
     assert resp.status_code == 413
+
+
+async def test_consent_binding_cookie_only_stamped_from_authorize_route():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F22: the binding cookie
+    # used to be stamped for *any* response redirecting to
+    # /oauth/consent?..., regardless of which route produced it — e.g. a
+    # login_submit 303 to a next=/oauth/consent?request_id=R value the
+    # browser never actually got from /authorize. It must only be stamped
+    # when /authorize itself produced the redirect.
+    from starlette.applications import Starlette
+    from starlette.responses import RedirectResponse
+    from starlette.routing import Route
+
+    from renderdesk.oauth_consent_state import OAUTH_FLOW_COOKIE_NAME, OAuthConsentBindingMiddleware
+
+    async def authorize_route(request):
+        return RedirectResponse(url="/oauth/consent?request_id=from-authorize", status_code=302)
+
+    async def other_route(request):
+        return RedirectResponse(url="/oauth/consent?request_id=from-elsewhere", status_code=303)
+
+    stub_app = Starlette(
+        routes=[Route("/authorize", authorize_route), Route("/dashboard/login", other_route, methods=["POST"])]
+    )
+    stub_app.add_middleware(OAuthConsentBindingMiddleware)
+
+    transport = httpx.ASGITransport(app=stub_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as c:
+        resp = await c.get("/authorize", follow_redirects=False)
+        assert OAUTH_FLOW_COOKIE_NAME in resp.cookies
+
+        resp2 = await c.post("/dashboard/login", follow_redirects=False)
+        assert resp2.cookies.get(OAUTH_FLOW_COOKIE_NAME) is None

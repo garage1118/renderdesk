@@ -32,6 +32,13 @@ def test_safe_next_path_rejects_extra_leading_slashes():
     assert safe_next_path("/\\/evil.com") == "/dashboard"
 
 
+def test_safe_next_path_rejects_oauth_consent():
+    # Regression for CLAUDE-SECURITY-RESULTS.md F22: a login `next` value
+    # must never point at /oauth/consent — that page is protected by a
+    # binding cookie meant to be stamped only by /authorize itself.
+    assert safe_next_path("/oauth/consent?request_id=abc") == "/dashboard"
+
+
 async def test_resolve_session_deletes_expired_row():
     user_id = await make_user(email="expired-session@example.com")
     async with session_scope() as session:

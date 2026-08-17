@@ -166,6 +166,13 @@ def safe_next_path(path: str) -> str:
         and not path.startswith("//")
         and "\\" not in path
         and all(c.isprintable() for c in path)
+        # /oauth/consent is a binding-cookie-protected destination
+        # (oauth_consent_state.py) — a login `next` value must never point
+        # there. OAuthConsentBindingMiddleware now also refuses to stamp
+        # that cookie from anywhere but /authorize itself, but keeping this
+        # value out of `next` in the first place is the belt to that
+        # braces (CLAUDE-SECURITY-RESULTS.md F22).
+        and parsed.path != "/oauth/consent"
     ):
         # Re-serialize from the parsed path/query rather than returning the
         # attacker-influenced raw string verbatim — belt-and-braces against

@@ -62,7 +62,19 @@ class OAuthConsentBindingMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         location = response.headers.get("location", "")
-        if response.status_code in (302, 303, 307, 308) and location.startswith("/oauth/consent?"):
+        # Must actually be the SDK's /authorize route producing this
+        # redirect — not just any response that happens to redirect to
+        # /oauth/consent?... . Without this check, login_submit's 303 to a
+        # `next=/oauth/consent?request_id=R` value (reachable via
+        # safe_next_path, which had no reason to know this path was
+        # special) re-stamped the binding cookie for an R the browser never
+        # actually obtained from /authorize, defeating the binding this
+        # middleware exists to provide (CLAUDE-SECURITY-RESULTS.md F22).
+        if (
+            response.status_code in (302, 303, 307, 308)
+            and location.startswith("/oauth/consent?")
+            and request.url.path == "/authorize"
+        ):
             request_id = parse_request_id_from_location(location)
             if request_id is not None:
                 response.set_cookie(
