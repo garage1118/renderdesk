@@ -340,6 +340,34 @@ async def test_idp_error_shows_clean_error_page(client, idp):
     assert "renderdesk_session" not in resp.cookies
 
 
+async def test_idp_error_description_is_never_reflected(client, idp):
+    # Regression for CLAUDE-SECURITY-RESULTS.md F13: error/error_description
+    # are attacker-controlled query params reachable with no cookie or
+    # prior flow — the response must never interpolate them, only render a
+    # fixed, allowlisted message.
+    await _start_login(client)
+    injected = "Your SSO session expired. Re-enter your password at https://evil.example"
+    resp = await client.get(
+        "/dashboard/auth/oidc/callback",
+        params={"error": "access_denied", "error_description": injected},
+    )
+    assert resp.status_code == 400
+    assert injected not in resp.text
+    assert "evil.example" not in resp.text
+    assert "Sign-in was cancelled at the identity provider." in resp.text
+
+
+async def test_idp_unknown_error_code_falls_back_to_generic_message(client, idp):
+    await _start_login(client)
+    resp = await client.get(
+        "/dashboard/auth/oidc/callback",
+        params={"error": "<script>alert(1)</script>", "error_description": "whatever"},
+    )
+    assert resp.status_code == 400
+    assert "<script>" not in resp.text
+    assert "Sign-in was cancelled or failed at the identity provider." in resp.text
+
+
 async def test_missing_authorization_code_rejected(client, idp):
     state, _nonce = await _start_login(client)
     resp = await _callback(client, state, code=None)

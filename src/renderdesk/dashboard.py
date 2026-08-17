@@ -1,3 +1,4 @@
+import logging
 import secrets
 import uuid
 from pathlib import Path
@@ -49,6 +50,27 @@ from renderdesk.tools import NotFoundError
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+_logger = logging.getLogger("renderdesk")
+
+# RFC 6749 §4.1.2.1's defined error codes, mapped to fixed, safe-to-render
+# strings — oidc_callback used to interpolate the IdP-supplied `error`/
+# `error_description` query params directly into the login page, which
+# needs no cookie, prior flow, or authentication to reach (it's checked
+# before the state cookie is even read), letting anyone put arbitrary
+# chosen text on the real login page over the real TLS certificate
+# (CLAUDE-SECURITY-RESULTS.md F13). Anything outside this allowlist — an
+# unrecognized code, or `error` present with no matching entry — falls
+# back to the generic message; the raw values are logged, never reflected.
+_OIDC_ERROR_MESSAGES = {
+    "invalid_request": "The identity provider rejected the sign-in request.",
+    "unauthorized_client": "This client is not authorized to sign in with the identity provider.",
+    "access_denied": "Sign-in was cancelled at the identity provider.",
+    "unsupported_response_type": "The identity provider does not support this sign-in method.",
+    "invalid_scope": "The identity provider rejected the requested access.",
+    "server_error": "The identity provider encountered an error. Please try again.",
+    "temporarily_unavailable": "The identity provider is temporarily unavailable. Please try again.",
+}
+_OIDC_GENERIC_ERROR_MESSAGE = "Sign-in was cancelled or failed at the identity provider."
 # Lets every template embed the current request's CSRF token via
 # {{ csrf_token(request) }} without every TemplateResponse call needing to
 # pass it through its context dict explicitly — `request` is already
@@ -202,7 +224,12 @@ async def oidc_callback(
         return resp
 
     if error:
-        return _fail(f"Sign-in was cancelled or failed at the identity provider ({error_description or error}).")
+        # Never interpolate error/error_description into the response —
+        # both are attacker-controlled query params reachable with no
+        # cookie, prior flow, or auth. Log the raw values server-side for
+        # debugging and show only a fixed, allowlisted message.
+        _logger.warning("oidc_callback received error=%r error_description=%r", error, error_description)
+        return _fail(_OIDC_ERROR_MESSAGES.get(error, _OIDC_GENERIC_ERROR_MESSAGE))
     if flow is None:
         return _fail("Your sign-in attempt expired or is invalid. Please try again.")
     if not state or not secrets.compare_digest(state, flow["s"]):
