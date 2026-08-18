@@ -69,7 +69,7 @@ class OAuthConsentBindingMiddleware(BaseHTTPMiddleware):
         # safe_next_path, which had no reason to know this path was
         # special) re-stamped the binding cookie for an R the browser never
         # actually obtained from /authorize, defeating the binding this
-        # middleware exists to provide (CLAUDE-SECURITY-RESULTS.md F22).
+        # middleware exists to provide.
         if (
             response.status_code in (302, 303, 307, 308)
             and location.startswith("/oauth/consent?")

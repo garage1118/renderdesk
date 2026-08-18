@@ -178,9 +178,8 @@ async def test_unlabelled_connection_falls_back_to_a_stable_non_empty_name():
 
 
 async def test_comment_count_quota_is_enforced_per_artifact(monkeypatch):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F19: comments were counted
-    # against no quota at all — an owner or a share recipient could write
-    # unbounded rows against one artifact.
+    # Regression: comments were counted against no quota at all — an owner
+    # or a share recipient could write unbounded rows against one artifact.
     monkeypatch.setattr(settings, "max_comments_per_artifact", 2)
     connection_id = await make_connection()
     artifact_id = await _publish(connection_id)

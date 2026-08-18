@@ -307,12 +307,11 @@ survive restarts (currently just the locked-in auth scheme).
   6749 doesn't leave room for the server to tell them apart at
   registration time. The residual harm is link-laundering for phishing
   (lending the domain and TLS cert to an attacker's landing page), not
-  token theft or account takeover — see CLAUDE-SECURITY-RESULTS.md F21 for
-  the full writeup and the options considered. Revisit if dynamic
-  registration ever grows an operator-approval step, which would close
-  this as a side effect — see "Finer-grained permissions" under
-  Limitations and roadmap below for the closest existing plan in that
-  direction (currently unstarted).
+  token theft or account takeover. Revisit if dynamic registration ever
+  grows an operator-approval step, which would close this as a side
+  effect — see "Finer-grained permissions" under Limitations and roadmap
+  below for the closest existing plan in that direction (currently
+  unstarted).
 
 ## Migrations
 

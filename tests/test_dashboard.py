@@ -22,20 +22,19 @@ def test_safe_next_path_rejects_crlf_and_control_chars():
 
 
 def test_safe_next_path_rejects_extra_leading_slashes():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F4: urlparse('///evil.com')
-    # reports empty scheme/netloc (it only recognizes an authority after
-    # exactly "//"), so those checks alone let this through as an open
-    # redirect — browsers still resolve the extra slashes away and treat
-    # evil.com as the host.
+    # Regression: urlparse('///evil.com') reports empty scheme/netloc (it
+    # only recognizes an authority after exactly "//"), so those checks
+    # alone let this through as an open redirect — browsers still resolve
+    # the extra slashes away and treat evil.com as the host.
     assert safe_next_path("///evil.com") == "/dashboard"
     assert safe_next_path("////evil.com") == "/dashboard"
     assert safe_next_path("/\\/evil.com") == "/dashboard"
 
 
 def test_safe_next_path_rejects_oauth_consent():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F22: a login `next` value
-    # must never point at /oauth/consent — that page is protected by a
-    # binding cookie meant to be stamped only by /authorize itself.
+    # Regression: a login `next` value must never point at /oauth/consent —
+    # that page is protected by a binding cookie meant to be stamped only
+    # by /authorize itself.
     assert safe_next_path("/oauth/consent?request_id=abc") == "/dashboard"
 
 
@@ -137,11 +136,11 @@ async def test_rendered_forms_embed_the_real_csrf_token(client):
 
 
 async def test_nonexistent_account_login_still_runs_bcrypt():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F12: verify_password used
-    # to return instantly for an absent account (no bcrypt call at all),
-    # which is a timing side channel an unauthenticated caller could use
-    # to enumerate which emails have accounts. It must always cost a real
-    # bcrypt verification, whether or not the user exists.
+    # Regression: verify_password used to return instantly for an absent
+    # account (no bcrypt call at all), which is a timing side channel an
+    # unauthenticated caller could use to enumerate which emails have
+    # accounts. It must always cost a real bcrypt verification, whether or
+    # not the user exists.
     from renderdesk.session_auth import verify_password
 
     assert verify_password(None, "whatever") is False
@@ -169,10 +168,10 @@ async def test_repeated_failed_logins_are_rate_limited(client):
 
 
 async def test_repeated_successful_logins_do_not_exhaust_the_ip_rate_limit(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F8: RateLimitMiddleware's
-    # login_ip bucket used to count every POST to /dashboard/login,
-    # success included, so a user who legitimately logs in often could
-    # eventually rate-limit themselves. Only failures should count.
+    # Regression: RateLimitMiddleware's login_ip bucket used to count every
+    # POST to /dashboard/login, success included, so a user who
+    # legitimately logs in often could eventually rate-limit themselves.
+    # Only failures should count.
     await make_user(email="frequent-login@example.com", password="correct-horse")
 
     for _ in range(25):
@@ -181,11 +180,11 @@ async def test_repeated_successful_logins_do_not_exhaust_the_ip_rate_limit(clien
 
 
 async def test_correct_password_always_succeeds_even_when_locked_out(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F5: the lockout is keyed on
-    # the submitted email alone, so an unauthenticated attacker who knows
-    # only a victim's email must not be able to lock the real owner out —
-    # credentials are checked before the lockout is ever consulted, so the
-    # owner presenting the correct password always gets in.
+    # Regression: the lockout is keyed on the submitted email alone, so an
+    # unauthenticated attacker who knows only a victim's email must not be
+    # able to lock the real owner out — credentials are checked before the
+    # lockout is ever consulted, so the owner presenting the correct
+    # password always gets in.
     await make_user(email="realowner@example.com", password="correct-horse")
 
     for _ in range(5):
@@ -270,9 +269,8 @@ async def test_comment_posted_via_dashboard_is_visible_to_mcp_and_vice_versa(cli
 
 
 async def test_owner_can_delete_a_comment_thread_via_dashboard(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F19: comments had no
-    # individual delete path — an owner could only reclaim space by
-    # deleting the whole artifact.
+    # Regression: comments had no individual delete path — an owner could
+    # only reclaim space by deleting the whole artifact.
     user_id = await make_user(email="threadowner@example.com", password="correct-horse")
     connection_id = await make_connection(user_id=user_id)
     async with session_scope() as session:

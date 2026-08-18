@@ -93,9 +93,9 @@ async def lifespan(app: FastAPI):
     # 127.0.0.1 by default) and every request behind a real reverse proxy
     # appears to share the proxy's address — collapsing the login lockout
     # and OAuth rate limits (rate_limit.py) into one bucket for every real
-    # client (CLAUDE-SECURITY-RESULTS.md F8). This can't be detected from
-    # inside the app (the peer address alone doesn't say "this is a
-    # proxy"), so it's a loud startup log rather than a refusal to start —
+    # client. This can't be detected from inside the app (the peer address
+    # alone doesn't say "this is a proxy"), so it's a loud startup log
+    # rather than a refusal to start —
     # a direct-to-internet deployment with no reverse proxy legitimately
     # has nothing to set here.
     if not settings.trusted_proxy_ips:
@@ -166,9 +166,9 @@ app.router.routes.extend(
         # enforcement is future work, not something to half-build here).
         # valid_scopes still matters now: without it a registrant can
         # claim any scope string it likes, and the consent screen used to
-        # render that string as if it meant something
-        # (CLAUDE-SECURITY-RESULTS.md F20) — the template no longer shows
-        # it, but this keeps a registered client's own metadata honest too.
+        # render that string as if it meant something — the template no
+        # longer shows it, but this keeps a registered client's own
+        # metadata honest too.
         client_registration_options=ClientRegistrationOptions(
             enabled=True, valid_scopes=["mcp"], default_scopes=["mcp"]
         ),

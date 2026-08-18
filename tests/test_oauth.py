@@ -296,9 +296,9 @@ async def test_missing_or_unknown_token_is_unauthorized():
 
 
 async def test_oversized_client_registration_is_rejected(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F9: /register is
-    # unauthenticated and the SDK's model puts no upper bound on
-    # client_name, so a huge value used to be persisted verbatim.
+    # Regression: /register is unauthenticated and the SDK's model puts no
+    # upper bound on client_name, so a huge value used to be persisted
+    # verbatim.
     resp = await client.post(
         "/register",
         json={
@@ -314,9 +314,9 @@ async def test_oversized_client_registration_is_rejected(client):
 
 
 async def test_register_request_body_over_the_hard_cap_is_rejected(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F9/F10: MaxBodySizeMiddleware
-    # should reject a body far too large for legitimate RFC 7591 metadata
-    # before it's ever buffered or JSON-parsed.
+    # Regression: MaxBodySizeMiddleware should reject a body far too large
+    # for legitimate RFC 7591 metadata before it's ever buffered or
+    # JSON-parsed.
     resp = await client.post(
         "/register",
         content=b"x" * 100_000,
@@ -343,9 +343,9 @@ async def test_mcp_request_body_over_the_hard_cap_is_rejected():
 
 
 async def test_consent_page_does_not_advertise_an_unenforced_scope(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F20: the consent screen
-    # used to render the registrant-supplied scope string as if it were a
-    # real limit, even though nothing downstream enforces scope at all.
+    # Regression: the consent screen used to render the registrant-supplied
+    # scope string as if it were a real limit, even though nothing
+    # downstream enforces scope at all.
     user_id = await make_user(email="consent-scope@example.com", password="pw123456")
     await _login(client, "consent-scope@example.com", "pw123456")
     client_id = await _register_client(client)
@@ -386,12 +386,11 @@ async def test_register_rejects_a_scope_outside_the_valid_set(client):
 
 
 async def test_consent_binding_cookie_only_stamped_from_authorize_route():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F22: the binding cookie
-    # used to be stamped for *any* response redirecting to
-    # /oauth/consent?..., regardless of which route produced it — e.g. a
-    # login_submit 303 to a next=/oauth/consent?request_id=R value the
-    # browser never actually got from /authorize. It must only be stamped
-    # when /authorize itself produced the redirect.
+    # Regression: the binding cookie used to be stamped for *any* response
+    # redirecting to /oauth/consent?..., regardless of which route produced
+    # it — e.g. a login_submit 303 to a next=/oauth/consent?request_id=R
+    # value the browser never actually got from /authorize. It must only
+    # be stamped when /authorize itself produced the redirect.
     from starlette.applications import Starlette
     from starlette.responses import RedirectResponse
     from starlette.routing import Route

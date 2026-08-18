@@ -13,7 +13,7 @@ MAX_COMMENT_BYTES = 100_000
 # Newest-first, capped: an artifact's comment page renders every thread
 # root with no LIMIT otherwise, so a large enough thread count makes the
 # page itself the resource-exhaustion vector regardless of the per-comment
-# size cap (CLAUDE-SECURITY-RESULTS.md F19).
+# size cap.
 MAX_DASHBOARD_THREADS = 200
 
 
@@ -302,8 +302,8 @@ async def delete_thread(session: AsyncSession, user_id: str, artifact_id: str, c
     """Dashboard-only, owner-only (unlike toggle_resolved/reply_as_human,
     which a share recipient can also reach) — the whole point is giving the
     artifact *owner* a way to reclaim space a recipient spent, without
-    deleting the entire artifact (CLAUDE-SECURITY-RESULTS.md F19). Deletes
-    the thread root and every reply under it."""
+    deleting the entire artifact. Deletes the thread root and every reply
+    under it."""
     await get_owned_artifact_by_user(session, user_id, artifact_id)
     root = (
         await session.execute(

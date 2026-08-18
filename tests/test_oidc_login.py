@@ -252,12 +252,12 @@ async def test_missing_email_and_preferred_username_falls_back_to_upn(client, id
 
 
 async def test_string_email_verified_false_does_not_count_as_verified(client, idp):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F15: bool("false") is True,
-    # so a non-compliant IdP emitting the *string* "false" used to let an
-    # explicitly-unverified email claim take the verified-email collision
-    # path anyway — that path is what blocks silently pre-registering an
-    # account keyed to someone else's address. A non-boolean claim must
-    # fail the login outright rather than being silently coerced.
+    # Regression: bool("false") is True, so a non-compliant IdP emitting
+    # the *string* "false" used to let an explicitly-unverified email claim
+    # take the verified-email collision path anyway — that path is what
+    # blocks silently pre-registering an account keyed to someone else's
+    # address. A non-boolean claim must fail the login outright rather
+    # than being silently coerced.
     priv_key, id_token_holder = idp
     existing_user_id = await make_user(email="already-here2@example.com", password="somepassword")
 
@@ -302,11 +302,11 @@ async def test_no_email_or_fallback_claims_rejected(client, idp):
 
 
 async def test_state_cookie_cannot_be_replayed_for_a_second_callback(client, idp):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F16: a self-obtained state
-    # cookie used to fund an unlimited number of outbound token-exchange
-    # attempts (one per callback hit, each with a different `code`) since
-    # nothing marked it used. The second attempt with the same state must
-    # be rejected before ever reaching the token exchange.
+    # Regression: a self-obtained state cookie used to fund an unlimited
+    # number of outbound token-exchange attempts (one per callback hit,
+    # each with a different `code`) since nothing marked it used. The
+    # second attempt with the same state must be rejected before ever
+    # reaching the token exchange.
     priv_key, id_token_holder = idp
     state, nonce = await _start_login(client)
     id_token_holder["token"] = _sign_id_token(priv_key, nonce=nonce, email="replay@example.com")
@@ -329,10 +329,9 @@ async def test_state_cookie_cannot_be_replayed_for_a_second_callback(client, idp
 
 
 async def test_stale_state_cookie_is_rejected_server_side():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F16: the cookie's Max-Age is
-    # only enforced by a real browser — a scripted caller replaying the raw
-    # cookie value ignores it. The signed payload's own "iat" has to be
-    # checked server-side.
+    # Regression: the cookie's Max-Age is only enforced by a real browser —
+    # a scripted caller replaying the raw cookie value ignores it. The
+    # signed payload's own "iat" has to be checked server-side.
     from renderdesk.oidc_state import OIDC_STATE_MAX_AGE, make_cookie_value
 
     value = make_cookie_value("s1", "n1", "v1", "/dashboard")
@@ -430,10 +429,9 @@ async def test_idp_error_shows_clean_error_page(client, idp):
 
 
 async def test_idp_error_description_is_never_reflected(client, idp):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F13: error/error_description
-    # are attacker-controlled query params reachable with no cookie or
-    # prior flow — the response must never interpolate them, only render a
-    # fixed, allowlisted message.
+    # Regression: error/error_description are attacker-controlled query
+    # params reachable with no cookie or prior flow — the response must
+    # never interpolate them, only render a fixed, allowlisted message.
     await _start_login(client)
     injected = "Your SSO session expired. Re-enter your password at https://evil.example"
     resp = await client.get(
@@ -562,9 +560,8 @@ def test_settings_password_scheme_does_not_require_oidc_fields():
 
 
 def test_settings_rejects_wildcard_trusted_proxy_ips():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F8: '*' makes
-    # X-Forwarded-For trivially attacker-spoofable, defeating every
-    # IP-keyed rate limit.
+    # Regression: '*' makes X-Forwarded-For trivially attacker-spoofable,
+    # defeating every IP-keyed rate limit.
     with pytest.raises(ValidationError) as exc_info:
         Settings(public_base_url="http://localhost:8000", auth_scheme="password", trusted_proxy_ips="*")
     message = str(exc_info.value.errors()[0]["ctx"]["error"])

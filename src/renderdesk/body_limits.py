@@ -11,9 +11,9 @@ class MaxBodySizeMiddleware:
     """Rejects oversized request bodies before anything downstream reads
     them into memory — nothing else in this app enforces a request-body
     cap, and the SDK/framework layers behind /mcp and /register buffer the
-    whole body before any application-level size check would otherwise run
-    (CLAUDE-SECURITY-RESULTS.md F9/F10). Raw ASGI rather than
-    BaseHTTPMiddleware so the cap is enforced on the byte stream itself
+    whole body before any application-level size check would otherwise
+    run. Raw ASGI rather than BaseHTTPMiddleware so the cap is enforced on
+    the byte stream itself
     (via a wrapped `receive`), not just on a `Content-Length` header a
     chunked-encoded or lying request could omit or understate.
 

@@ -116,11 +116,11 @@ def test_failed_login_sweep_never_clears_an_active_lockout():
 
 
 async def test_oauth_sweep_does_not_delete_old_client_with_unexpired_pending_code():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F14: a client old enough to
-    # be swept can still have an *unexpired* pending authorization code —
-    # /authorize creates one on every hit, unauthenticated, with its own
-    # independent 10-minute expiry — so deleting the client used to violate
-    # the foreign key and raise, killing the sweep loop for good.
+    # Regression: a client old enough to be swept can still have an
+    # *unexpired* pending authorization code — /authorize creates one on
+    # every hit, unauthenticated, with its own independent 10-minute
+    # expiry — so deleting the client used to violate the foreign key and
+    # raise, killing the sweep loop for good.
     client_id = f"old-client-{uuid.uuid4()}"
     async with session_scope() as session:
         session.add(

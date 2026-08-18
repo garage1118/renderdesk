@@ -29,9 +29,9 @@ _SIGNING_KEY = secrets.token_bytes(32)
 # before it does anything else with the request, regardless of whether the
 # code exchange that follows succeeds — that's what stops a single
 # self-funded state from driving unlimited outbound token-exchange
-# attempts against the IdP (CLAUDE-SECURITY-RESULTS.md F16). In-memory and
-# swept the same way as session_auth's/rate_limit's other unauthenticated-
-# key trackers — fine for this app's single-process deployment.
+# attempts against the IdP. In-memory and swept the same way as
+# session_auth's/rate_limit's other unauthenticated-key trackers — fine
+# for this app's single-process deployment.
 _used_states: dict[str, float] = {}
 
 
@@ -74,8 +74,7 @@ def read_cookie_value(raw: str) -> dict | None:
     issued) only bounds a real browser — it's client-enforced and a
     scripted caller replaying the raw cookie value is free to ignore it.
     "iat" inside the *signed* payload is what actually bounds the cookie's
-    lifetime server-side, closing that gap (CLAUDE-SECURITY-RESULTS.md
-    F16)."""
+    lifetime server-side, closing that gap."""
     try:
         body, sig = raw.rsplit(".", 1)
         payload = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))

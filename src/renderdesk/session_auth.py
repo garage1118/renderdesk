@@ -62,8 +62,8 @@ def sweep_stale_failed_logins() -> int:
 # account takes the hundreds of milliseconds bcrypt.checkpw costs by
 # design, which is a two-to-three-order-of-magnitude timing side channel
 # an unauthenticated caller can use to enumerate which emails have
-# accounts (CLAUDE-SECURITY-RESULTS.md F12). Generated once at import so
-# every "no real hash" call costs the same as a real check, every time.
+# accounts. Generated once at import so every "no real hash" call costs
+# the same as a real check, every time.
 _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"renderdesk-timing-placeholder", bcrypt.gensalt(rounds=12)).decode()
 
 
@@ -171,7 +171,7 @@ def safe_next_path(path: str) -> str:
         # there. OAuthConsentBindingMiddleware now also refuses to stamp
         # that cookie from anywhere but /authorize itself, but keeping this
         # value out of `next` in the first place is the belt to that
-        # braces (CLAUDE-SECURITY-RESULTS.md F22).
+        # braces.
         and parsed.path != "/oauth/consent"
     ):
         # Re-serialize from the parsed path/query rather than returning the

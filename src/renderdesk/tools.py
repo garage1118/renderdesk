@@ -11,9 +11,9 @@ from renderdesk.models import OAuthRefreshToken as OAuthRefreshTokenRow
 from renderdesk.quotas import QuotaExceededError, check_new_artifact_quota, check_update_quota, quota_lock
 
 # title/language were previously written unbounded and unmeasured — quotas
-# only ever accounted for content bytes (see CLAUDE-SECURITY-RESULTS.md
-# F3), so an oversized title could write far more than its 1-byte
-# `content='x'` would suggest. Small, fixed caps rather than settings:
+# only ever accounted for content bytes, so an oversized title could write
+# far more than its 1-byte `content='x'` would suggest. Small, fixed caps
+# rather than settings:
 # these are display metadata, not a deployment-tunable storage budget.
 MAX_TITLE_BYTES = 500
 MAX_LANGUAGE_BYTES = 100
@@ -232,7 +232,7 @@ async def publish_artifact(
     _check_metadata_size(title, language)
     # byte_size backs both the connection quota and reported artifact size,
     # so it has to reflect everything actually written — title/language
-    # bytes included, not just content (see CLAUDE-SECURITY-RESULTS.md F3).
+    # bytes included, not just content.
     byte_size = len(content.encode()) + len((title or "").encode()) + len((language or "").encode())
 
     async with quota_lock(connection_id):

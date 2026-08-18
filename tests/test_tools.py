@@ -323,10 +323,10 @@ async def test_reassign_respects_target_connection_quota(monkeypatch):
 
 
 async def test_repeated_updates_are_bounded_by_connection_quota(monkeypatch):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F3: update_artifact appends
-    # a full version row on every call, so a connection's byte quota has to
-    # account for that history — not just the artifact's current
-    # byte_size — or an update loop can write far past its quota.
+    # Regression: update_artifact appends a full version row on every call,
+    # so a connection's byte quota has to account for that history — not
+    # just the artifact's current byte_size — or an update loop can write
+    # far past its quota.
     monkeypatch.setattr(settings, "max_total_bytes_per_connection", 30)
     connection_id = await make_connection()
     async with session_scope() as session:

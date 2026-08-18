@@ -59,10 +59,10 @@ _logger = logging.getLogger("renderdesk")
 # `error_description` query params directly into the login page, which
 # needs no cookie, prior flow, or authentication to reach (it's checked
 # before the state cookie is even read), letting anyone put arbitrary
-# chosen text on the real login page over the real TLS certificate
-# (CLAUDE-SECURITY-RESULTS.md F13). Anything outside this allowlist — an
-# unrecognized code, or `error` present with no matching entry — falls
-# back to the generic message; the raw values are logged, never reflected.
+# chosen text on the real login page over the real TLS certificate.
+# Anything outside this allowlist — an unrecognized code, or `error`
+# present with no matching entry — falls back to the generic message; the
+# raw values are logged, never reflected.
 _OIDC_ERROR_MESSAGES = {
     "invalid_request": "The identity provider rejected the sign-in request.",
     "unauthorized_client": "This client is not authorized to sign in with the identity provider.",
@@ -114,19 +114,17 @@ async def login_submit(
     _require_password_scheme()
     # Credentials are checked before the lockout is consulted at all: an
     # unauthenticated caller who only knows a victim's email must not be
-    # able to lock the real owner out just by submitting wrong passwords
-    # (CLAUDE-SECURITY-RESULTS.md F5) — the owner presenting the *correct*
-    # password always gets in, regardless of how many failed attempts
-    # preceded it. The lockout still gates the 401 path, so a caller
-    # without the real password can't brute-force it past five guesses
-    # per window.
+    # able to lock the real owner out just by submitting wrong passwords —
+    # the owner presenting the *correct* password always gets in,
+    # regardless of how many failed attempts preceded it. The lockout
+    # still gates the 401 path, so a caller without the real password
+    # can't brute-force it past five guesses per window.
     async with session_scope() as session:
         user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
         # verify_password is always called, even when user is None — it
         # runs a real bcrypt verification against a dummy hash in that
-        # case (CLAUDE-SECURITY-RESULTS.md F12), so an absent account
-        # costs the same as a wrong password on a real one instead of
-        # returning near-instantly.
+        # case, so an absent account costs the same as a wrong password on
+        # a real one instead of returning near-instantly.
         password_ok = verify_password(user, password)
         if user is not None and password_ok:
             clear_failed_logins(email)
@@ -239,7 +237,7 @@ async def oidc_callback(
     # Single-use: marked before the code exchange is even attempted, and
     # regardless of whether it later succeeds, so a captured or
     # self-minted state cookie can't fund more than one outbound token
-    # exchange (CLAUDE-SECURITY-RESULTS.md F16).
+    # exchange.
     if is_state_used(flow["s"]):
         return _fail("Your sign-in attempt expired or is invalid. Please try again.")
     mark_state_used(flow["s"])
@@ -257,9 +255,9 @@ async def oidc_callback(
     # ones fronting SAML/LDAP) emit the strings "true"/"false" instead —
     # bool("false") is True, which used to let an explicitly-unverified
     # email claim silently gate the same trusted-email path a real
-    # verified claim does (CLAUDE-SECURITY-RESULTS.md F15). A present but
-    # non-boolean claim is treated as malformed and fails the login
-    # outright, rather than silently downgrading it to "unverified" and
+    # verified claim does. A present but non-boolean claim is treated as
+    # malformed and fails the login outright, rather than silently
+    # downgrading it to "unverified" and
     # continuing — a non-compliant claim shape is itself suspicious enough
     # not to guess at.
     email_verified_claim = claims.get("email_verified")
@@ -382,9 +380,9 @@ async def oauth_consent_form(request: Request, request_id: str, user: User = Dep
         ).scalar_one_or_none()
     # Registrant-supplied and unverified (see the template's own note next
     # to it) — truncated because /register has no length cap on
-    # client_name beyond oauth_provider's overall metadata-size limit
-    # (CLAUDE-SECURITY-RESULTS.md F9), and this is the one place that
-    # value reaches a human as opposed to just sitting in a DB row.
+    # client_name beyond oauth_provider's overall metadata-size limit, and
+    # this is the one place that value reaches a human as opposed to just
+    # sitting in a DB row.
     raw_client_name = (client_row.metadata_json.get("client_name") if client_row else None) or row.client_id
     client_name = raw_client_name[:100]
     redirect_host = urlparse(row.redirect_uri).netloc
@@ -698,8 +696,7 @@ async def dashboard_delete_comment_thread(
 ):
     # Owner-only, unlike resolve/reply above — see comments.delete_thread's
     # docstring. Gives the owner a way to reclaim space a share recipient
-    # spent without deleting the whole artifact (CLAUDE-SECURITY-RESULTS.md
-    # F19).
+    # spent without deleting the whole artifact.
     async with session_scope() as session:
         try:
             await comments.delete_thread(session, user.id, artifact_id, comment_id)

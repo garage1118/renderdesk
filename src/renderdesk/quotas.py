@@ -37,10 +37,10 @@ async def _connection_stored_bytes(session: AsyncSession, connection_id: str) ->
     """Every byte actually persisted for a connection: not just each
     artifact's current content (Artifact.byte_size), but every version
     still stored in artifact_versions — the table update_artifact appends
-    to on every call and quotas never accounted for otherwise (see
-    CLAUDE-SECURITY-RESULTS.md F3). ArtifactVersion rows cascade-delete
-    with their artifact (see tools._delete_artifact_rows), so this join
-    never sums orphaned history."""
+    to on every call and quotas never accounted for otherwise.
+    ArtifactVersion rows cascade-delete with their artifact (see
+    tools._delete_artifact_rows), so this join never sums orphaned
+    history."""
     return (
         await session.execute(
             select(func.coalesce(func.sum(ArtifactVersion.byte_size), 0))

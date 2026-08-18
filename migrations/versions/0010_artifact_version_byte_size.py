@@ -37,7 +37,7 @@ def upgrade() -> None:
     #   it runs, ahead of the UPDATE and alembic's own version-bump commit)
     #   and the final commit used to leave a host wedged forever — every
     #   subsequent boot hit "duplicate column name: byte_size" and never
-    #   got further (CLAUDE-SECURITY-RESULTS.md F17). add_column is now
+    #   got further. add_column is now
     #   skipped if the column is already there, so a retried upgrade — from
     #   either a genuine interruption or Alembic recording the migration as
     #   already applied but the column already existing some other way —

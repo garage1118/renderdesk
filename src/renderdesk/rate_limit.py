@@ -48,8 +48,7 @@ _RULES: dict[tuple[str, str], tuple[str, int, timedelta, bool]] = {
     # reaches the callback — oidc_state.py's single-use/time-bounded state
     # closes the "replay the same cookie forever" angle, but nothing
     # otherwise stops a fresh /login+/callback pair being scripted at high
-    # volume (CLAUDE-SECURITY-RESULTS.md F16). Same shape as the login_ip
-    # rule above.
+    # volume. Same shape as the login_ip rule above.
     ("GET", "/dashboard/auth/oidc/login"): ("oidc_ip", 20, timedelta(minutes=15), True),
     ("GET", "/dashboard/auth/oidc/callback"): ("oidc_ip", 20, timedelta(minutes=15), True),
 }
@@ -60,7 +59,7 @@ _RULES: dict[tuple[str, str], tuple[str, int, timedelta, bool]] = {
 # required), but comments.py's per-artifact byte/count quota is enforced
 # independent of who's writing — including a share recipient who never
 # owns the artifact — so a coarse per-IP throttle on top bounds how fast
-# one caller can spend that budget (CLAUDE-SECURITY-RESULTS.md F19).
+# one caller can spend that budget.
 _COMMENT_ROUTE_RULE = ("comment_ip", 30, timedelta(minutes=5), True)
 
 
@@ -109,9 +108,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     into the image, so a deployment behind a reverse proxy that forgets to
     set it gets every request attributed to the proxy's own address, and
     every limit here collapses into one shared bucket for every real
-    client (CLAUDE-SECURITY-RESULTS.md F8; app.py logs a startup warning
-    for this case, since it can't be detected or fixed from inside the
-    app).
+    client (app.py logs a startup warning for this case, since it can't
+    be detected or fixed from inside the app).
     """
 
     async def dispatch(self, request: Request, call_next):

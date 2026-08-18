@@ -58,14 +58,14 @@ async def test_unknown_artifact_id_is_404(client):
 
 
 async def test_render_highlighted_source_uses_a_fresh_formatter_per_call():
-    # Regression for CLAUDE-SECURITY-RESULTS.md F11: the pinned Pygments
-    # version's HtmlFormatter carries a class-level, per-instance-keyed
-    # lru_cache that retains every distinct highlighted token text it's
-    # ever seen. A module-level singleton formatter never gets garbage
-    # collected, so nothing about it (or entries keyed on it) is ever
-    # collectable independent of the cache's own eviction. Building a new
-    # formatter per call means no code path holds a formatter alive longer
-    # than the single render it's used for.
+    # Regression: the pinned Pygments version's HtmlFormatter carries a
+    # class-level, per-instance-keyed lru_cache that retains every
+    # distinct highlighted token text it's ever seen. A module-level
+    # singleton formatter never gets garbage collected, so nothing about
+    # it (or entries keyed on it) is ever collectable independent of the
+    # cache's own eviction. Building a new formatter per call means no
+    # code path holds a formatter alive longer than the single render it's
+    # used for.
     from renderdesk.view import _new_pygments_formatter
 
     first = _new_pygments_formatter()
@@ -200,10 +200,10 @@ async def test_empty_csv_artifact_renders_without_error(client):
 
 
 async def test_large_csv_artifact_is_row_capped_not_fully_rendered(client):
-    # Regression for CLAUDE-SECURITY-RESULTS.md F7: rendering every row of a
-    # multi-million-row CSV amplifies into hundreds of MB of transient
-    # allocation. The table view has to stop at a row cap and point at the
-    # raw download instead of materializing everything.
+    # Regression: rendering every row of a multi-million-row CSV amplifies
+    # into hundreds of MB of transient allocation. The table view has to
+    # stop at a row cap and point at the raw download instead of
+    # materializing everything.
     from renderdesk.view import _CSV_MAX_RENDERED_ROWS
 
     connection_id = await make_connection()

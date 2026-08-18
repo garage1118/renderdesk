@@ -42,11 +42,10 @@ AUTHORIZATION_CODE_TTL = timedelta(minutes=10)
 # /register is unauthenticated (RFC 7591 dynamic client registration) and
 # the SDK's model puts no upper bound on any field — client_name has no
 # max_length, redirect_uris/contacts have no item count, jwks is typed
-# Any. Without this, one POST persists whatever size document is sent
-# (CLAUDE-SECURITY-RESULTS.md F9). A few KB is generous for real client
-# metadata; this is checked against the serialized document, not any
-# single field, so it also bounds redirect_uris/contacts list length and
-# jwks in one place.
+# Any. Without this, one POST persists whatever size document is sent. A
+# few KB is generous for real client metadata; this is checked against the
+# serialized document, not any single field, so it also bounds
+# redirect_uris/contacts list length and jwks in one place.
 _MAX_CLIENT_METADATA_BYTES = 8192
 
 
@@ -69,13 +68,13 @@ class RenderdeskOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         # No redirect_uris allowlist here, deliberately — see DESIGN_NOTES.md
         # "Accepted risk: dynamic client registration makes /authorize's
-        # error path an open redirector" (CLAUDE-SECURITY-RESULTS.md F21).
-        # RFC 6749's error-redirect semantics point at whatever URI the
-        # client registered, and that URI is attacker's-perspective-
-        # arbitrary for every legitimate dynamically-registered client too
-        # — there's no way to distinguish a real browser-based MCP client
-        # from a fake one by redirect_uri shape alone, so an allowlist
-        # would reject real clients along with attacker ones.
+        # error path an open redirector". RFC 6749's error-redirect
+        # semantics point at whatever URI the client registered, and that
+        # URI is attacker's-perspective-arbitrary for every legitimate
+        # dynamically-registered client too — there's no way to
+        # distinguish a real browser-based MCP client from a fake one by
+        # redirect_uri shape alone, so an allowlist would reject real
+        # clients along with attacker ones.
         metadata = client_info.model_dump(mode="json")
         metadata_bytes = len(json.dumps(metadata).encode())
         if metadata_bytes > _MAX_CLIENT_METADATA_BYTES:
@@ -384,7 +383,7 @@ async def sweep_expired_oauth_rows() -> None:
     every hit, including unauthenticated ones, with its own independent
     10-minute expiry — so "no expired rows reference it" doesn't imply "no
     rows reference it". Deleting it anyway violated the foreign key and
-    used to raise IntegrityError (CLAUDE-SECURITY-RESULTS.md F14)."""
+    used to raise IntegrityError."""
     now = utcnow()
     async with session_scope() as session:
         await session.execute(delete(OAuthAuthorizationCodeRow).where(OAuthAuthorizationCodeRow.expires_at <= now))

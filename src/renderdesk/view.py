@@ -319,10 +319,9 @@ _PYGMENTS_CSS = (
 # functools.lru_cache(maxsize=100) on the method highlight() calls per
 # token, keyed on (self, token_text), so a shared instance retains every
 # distinct attacker-supplied token string (and its escaped HTML) for the
-# life of the process — roughly 15MB per large entry, measured (see
-# CLAUDE-SECURITY-RESULTS.md F11). Building a fresh formatter per call
-# means that cache dies with the formatter right after the call, instead
-# of accumulating.
+# life of the process — roughly 15MB per large entry, measured. Building a
+# fresh formatter per call means that cache dies with the formatter right
+# after the call, instead of accumulating.
 
 
 def _new_pygments_formatter() -> HtmlFormatter:
@@ -388,8 +387,8 @@ _CSV_CSS = (
 # turns every newline into a list object and every cell into a string, so
 # a 2MB file of nothing but newlines or commas still produces millions of
 # small Python objects and a matching number of "<tr></tr>"-shaped
-# strings (CLAUDE-SECURITY-RESULTS.md F7: ~140x memory amplification,
-# measured). Bounding the row count is what actually caps the blow-up —
+# strings — roughly a 140x memory amplification, measured. Bounding the
+# row count is what actually caps the blow-up —
 # capping bytes wouldn't, since the cost scales with row count at a fixed
 # byte budget. Truncating past the cap keeps the common case (any
 # reasonably-sized CSV) rendering exactly as before.

@@ -23,8 +23,7 @@ class Settings(BaseSettings):
     max_bytes_per_artifact: int = 2_000_000
     max_total_bytes_per_connection: int = 50_000_000
     # Bounds the one table quotas.py's byte accounting didn't originally
-    # cover (see DESIGN_NOTES.md / CLAUDE-SECURITY-RESULTS.md F3):
-    # update_artifact appends a full content copy per call with no
+    # cover: update_artifact appends a full content copy per call with no
     # automatic pruning, so an unbounded update loop could otherwise write
     # far more than max_total_bytes_per_connection actually allows once
     # version history is counted. Enforced at write time in
@@ -38,7 +37,7 @@ class Settings(BaseSettings):
     # so this can't reuse the connection/user byte quota above without
     # letting one person's comments spend another's budget. Bounded per
     # artifact instead — cheap to check, and it's the artifact whose page
-    # would otherwise grow unbounded (CLAUDE-SECURITY-RESULTS.md F19).
+    # would otherwise grow unbounded.
     max_comments_per_artifact: int = 500
     max_comment_bytes_per_artifact: int = 2_000_000
 
@@ -53,8 +52,7 @@ class Settings(BaseSettings):
     # only 127.0.0.1 and silently ignores X-Forwarded-For from a real
     # proxy — safe rather than a startup failure, but collapses every
     # client behind that proxy into one shared rate-limit bucket; see the
-    # startup warning in app.py for that case. See
-    # CLAUDE-SECURITY-RESULTS.md F8.
+    # startup warning in app.py for that case.
     trusted_proxy_ips: str | None = None
 
     # Read only by the Stage 2 migration to seed the first User row — never
