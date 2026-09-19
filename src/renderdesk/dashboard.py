@@ -743,7 +743,11 @@ async def dashboard_create_token(
 ):
     async with session_scope() as session:
         token = await create_personal_token(session, user.id, label or None)
-    return templates.TemplateResponse(request, "dashboard_token_created.html", {"token": token, "user": user})
+    return templates.TemplateResponse(
+        request,
+        "dashboard_token_created.html",
+        {"token": token, "user": user, "mcp_url": f"{settings.public_base_url}/mcp"},
+    )
 
 
 @router.post("/dashboard/connections/{connection_id}/revoke", dependencies=[Depends(verify_csrf)])

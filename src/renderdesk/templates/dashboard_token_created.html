@@ -15,6 +15,11 @@
     <span id="token" style="flex:1">{{ token }}</span>
     <button type="button" class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('token').textContent)">Copy</button>
   </div>
+  <div class="alert alert-warn" style="margin-top:1.5rem">Use this MCP server URL when connecting a client:</div>
+  <div class="token-box">
+    <span id="mcp-url" style="flex:1">{{ mcp_url }}</span>
+    <button type="button" class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('mcp-url').textContent)">Copy</button>
+  </div>
   <p class="breadcrumb" style="margin-top:1.5rem"><a href="/dashboard/connections">&larr; Back to connections</a></p>
 </main>
 </html>
