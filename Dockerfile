@@ -7,9 +7,13 @@ COPY src ./src
 RUN uv sync --frozen --no-dev
 
 FROM python:3.12-slim
-RUN apt-get update && apt-get install --no-install-recommends -y \
+# Upgrade first so Debian security fixes newer than the base image's last
+# rebuild are picked up, and drop the base image's system pip — nothing here
+# runs it (dependencies live in the copied venv), so it's only scanner noise.
+RUN apt-get update && apt-get upgrade -y && apt-get install --no-install-recommends -y \
     gosu \
     && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip \
     && useradd --create-home --uid 1000 appuser
 WORKDIR /app
 COPY --from=builder /app/.venv ./.venv
