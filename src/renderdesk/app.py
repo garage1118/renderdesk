@@ -14,6 +14,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOption
 from pydantic import AnyHttpUrl
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from renderdesk.auth import MCPAuthMiddleware
 from renderdesk.auth_scheme import ensure_auth_scheme
@@ -37,6 +38,27 @@ _SWEEP_INTERVAL = timedelta(hours=1)
 _logger = logging.getLogger("renderdesk")
 
 _mcp_asgi_app = mcp.streamable_http_app()
+
+
+class MCPBarePathMiddleware:
+    """Routes bare `/mcp` straight to the `/mcp` mount instead of letting
+    Starlette 307-redirect it to `/mcp/`.
+
+    `/mcp` (no slash) is the advertised OAuth resource URL, so it's what
+    OAuth-configured clients connect to. Behind a TLS-terminating proxy
+    whose address uvicorn doesn't trust for forwarded headers, the redirect
+    comes back as `http://`, and clients (claude.ai's connector relay
+    included) correctly refuse an https→http downgrade — surfacing it as an
+    opaque 502 with nothing in renderdesk's own logs. Never redirecting
+    sidesteps that whole failure mode, whatever the proxy setup."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] == "/mcp":
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+        await self.app(scope, receive, send)
 
 
 def _run_migrations() -> None:
@@ -131,6 +153,7 @@ app.add_middleware(CSRFCookieMiddleware)
 app.add_middleware(OAuthConsentBindingMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(MCPBarePathMiddleware)
 # Added last so it ends up outermost (see MaxBodySizeMiddleware's
 # docstring) — rejects an oversized body before any other middleware, or
 # the MCP SDK/OAuth registration handler underneath, ever buffers it.

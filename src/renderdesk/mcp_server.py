@@ -195,8 +195,6 @@ OpenCode) — a browser-only client has no channel to reach `/mcp` outside \
 its own tool-calling loop.
 
 Gotchas:
-- Always hit the path with a trailing slash (`/mcp/`) — the bare path \
-307-redirects and curl won't follow it here.
 - Every response is SSE-framed, not plain JSON — read the payload off the \
 `data:` line.
 - The server runs in stateless mode: no `initialize` handshake or session \

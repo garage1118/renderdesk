@@ -558,7 +558,13 @@ alone:
 - **Trailing slash matters.** `app.mount("/mcp", ...)` 307-redirects
   `POST /mcp` (no trailing slash) to `/mcp/` — `curl` doesn't follow
   redirects by default, so a request to the bare path silently 307s
-  instead of reaching the tool. Always hit `/mcp/`.
+  instead of reaching the tool. Always hit `/mcp/`. *Since fixed:*
+  `MCPBarePathMiddleware` in `app.py` now serves bare `/mcp` directly.
+  The redirect also broke claude.ai's connector, which connects to the
+  advertised resource URL (`/mcp`, no slash): behind a proxy uvicorn
+  doesn't trust for forwarded headers, the 307 came back as `http://`,
+  the relay refused the downgrade and reported a 502, and renderdesk's
+  own logs showed nothing.
 - Every response is SSE-framed exactly as predicted — pull the payload
   from the `data:` line, don't expect a bare JSON body.
 
@@ -567,8 +573,7 @@ BASE="https://renderdesk.example.com"
 TOKEN="<connection bearer token>"
 
 # 1. initialize — no session ID yet; the server mints one and returns it
-#    as a response header, not in the body. Note the trailing slash on
-#    /mcp/ — the bare path 307-redirects and curl won't follow it here.
+#    as a response header, not in the body.
 curl -s -D /tmp/mcp_headers.txt -o /tmp/mcp_init.txt -X POST "$BASE/mcp/" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \

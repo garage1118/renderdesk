@@ -342,6 +342,24 @@ async def test_mcp_request_body_over_the_hard_cap_is_rejected():
     assert resp.status_code == 413
 
 
+async def test_bare_mcp_path_is_served_not_redirected():
+    # /mcp (no slash) is the advertised resource URL. A 307 to /mcp/ comes
+    # back as http:// behind a TLS proxy uvicorn doesn't trust, which
+    # claude.ai's connector relay refuses to follow — so it must be served.
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8000") as c:
+        resp = await c.post(
+            "/mcp",
+            json={},
+            headers={
+                "accept": "application/json, text/event-stream",
+                "authorization": "Bearer not-a-real-token",
+            },
+        )
+    assert resp.status_code == 401
+    assert resp.json() == {"error": "unauthorized"}
+
+
 async def test_consent_page_does_not_advertise_an_unenforced_scope(client):
     # Regression: the consent screen used to render the registrant-supplied
     # scope string as if it were a real limit, even though nothing
