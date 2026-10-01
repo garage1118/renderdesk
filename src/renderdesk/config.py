@@ -55,11 +55,6 @@ class Settings(BaseSettings):
     # startup warning in app.py for that case.
     trusted_proxy_ips: str | None = None
 
-    # Read only by the Stage 2 migration to seed the first User row — never
-    # read by the running app itself, so it's fine to unset after that runs.
-    admin_bootstrap_email: str | None = None
-    admin_bootstrap_password: str | None = None
-
     # Required only when auth_scheme == "oidc" (see the validator below) —
     # see oidc.py for how these drive discovery/token-exchange/redirect_uri.
     oidc_issuer_url: str | None = None
@@ -99,7 +94,7 @@ try:
 except ValidationError as exc:
     # Pydantic's default rendering dumps the entire raw input mapping as
     # context on every error, which would print any already-set secrets
-    # (e.g. admin_bootstrap_password) in plaintext to the container logs
+    # (e.g. oidc_client_secret) in plaintext to the container logs
     # just because some unrelated required field was missing. Only the
     # field names are safe to surface. A model_validator's plain ValueError
     # (see _require_oidc_settings_when_active) has an empty loc — its
