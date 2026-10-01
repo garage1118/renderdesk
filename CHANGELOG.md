@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.5] - 2026-10-01
+
+### Removed
+
+- The `RENDERDESK_ADMIN_BOOTSTRAP_EMAIL` and
+  `RENDERDESK_ADMIN_BOOTSTRAP_PASSWORD` settings. Nothing has read them
+  since the migrations were squashed into a single baseline; create the
+  first account with `renderdesk create-user` instead. A container that
+  still sets them as environment variables starts normally — they are
+  ignored. A `.env` file that still lists them fails at startup, so delete
+  those two lines from it.
+
+### Documentation
+
+- New [Configuration](https://garage1118.github.io/renderdesk/configuration/)
+  page listing every setting and its default, including how to set
+  `RENDERDESK_TRUSTED_PROXY_IPS` behind a reverse proxy.
+
 ## [1.2.4] - 2026-10-01
 
 ### Fixed

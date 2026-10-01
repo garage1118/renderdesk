@@ -1,6 +1,6 @@
 [project]
 name = "renderdesk"
-version = "1.2.4"
+version = "1.2.5"
 description = "Self-hosted MCP artifact store"
 requires-python = ">=3.11"
 dependencies = [
