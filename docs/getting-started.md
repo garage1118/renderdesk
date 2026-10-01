@@ -105,7 +105,7 @@ Every connection has these default limits:
 If a client hits a limit, `publish_artifact` or `update_artifact`
 returns a `quota_exceeded` error. Delete an old artifact from the
 dashboard to free up room, or ask your administrator to raise the
-limit.
+limit (see [Configuration](configuration.md#limits)).
 
 ## Next steps
 

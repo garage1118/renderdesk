@@ -39,7 +39,12 @@ docker exec -it renderdesk renderdesk create-user --email you@example.com
 
 Put renderdesk behind a reverse proxy with TLS for anything beyond
 local use, and set `RENDERDESK_PUBLIC_BASE_URL` to the public HTTPS
-URL you're serving it at.
+URL you're serving it at. Also set `RENDERDESK_TRUSTED_PROXY_IPS` to
+the proxy's address. Without it, every visitor shares one rate-limit
+bucket and redirects point at `http://`. Prefer the Docker network's
+subnet as a CIDR over a single IP, since Docker can reassign container
+IPs. See [Configuration](https://garage1118.github.io/renderdesk/configuration/)
+for every setting.
 
 ## Documentation
 

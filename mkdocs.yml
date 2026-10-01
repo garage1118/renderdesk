@@ -37,6 +37,7 @@ nav:
   - Dashboard guide: dashboard-guide.md
   - MCP tool reference: mcp-tools.md
   - CLI reference: cli-reference.md
+  - Configuration: configuration.md
 
 markdown_extensions:
   - tables
