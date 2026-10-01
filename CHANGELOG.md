@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.4] - 2026-10-01
+
+### Fixed
+
+- A request to the bare `/mcp` path (no trailing slash) is now served
+  directly instead of 307-redirected to `/mcp/`. `/mcp` is the advertised
+  OAuth resource URL, so it's what OAuth-configured clients such as
+  claude.ai's connector use. Behind a TLS-terminating reverse proxy that
+  uvicorn doesn't trust for forwarded headers, the redirect pointed at
+  `http://`, and clients refused the HTTPS-to-HTTP downgrade. claude.ai
+  reported this as a 502, with nothing in renderdesk's own logs.
+
+## [1.2.3] - 2026-09-19
+
+### Added
+
+- The dashboard's token-created page now shows the MCP server URL, with a
+  copy button, next to the new token.
+
+### Security
+
+- The runtime image now applies Debian security updates at build time, so
+  fixes released after the base image's last rebuild are included.
+- Removed the base image's system `pip` from the runtime image. Nothing
+  runs it, so it only added scanner findings.
+
+## [1.2.2] - 2026-08-24
+
+### Security
+
+- Upgraded the transitive `cryptography` dependency to 50.0.0
+  (CVE-2026-69247).
+- Published images now carry SBOM and provenance attestations.
+
 ## [1.2.1] - 2026-08-17
 
 ### Security
