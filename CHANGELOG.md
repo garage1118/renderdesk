@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.2.6] - 2026-10-02
+
+### Fixed
+
+- `react` artifacts can now import the optional vendored libraries
+  (`three`, `lodash`, `d3`, `mathjs`, `chart.js`, `tone`, `papaparse`,
+  `xlsx`). Their `<script>` tags were emitted after the script that runs
+  the artifact, so every such import failed with an "is not available"
+  error. This affected every release since 1.2.0. `html` artifacts were
+  not affected.
+
 ## [1.2.5] - 2026-10-01
 
 ### Removed
