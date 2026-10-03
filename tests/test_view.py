@@ -532,6 +532,7 @@ async def test_react_artifact_import_loads_matching_vendored_library(client, imp
     resp = await client.get(f"/a/{published['artifact_id']}/raw")
     assert resp.status_code == 200
     assert vendor_path in resp.text
+    assert resp.text.index(vendor_path) < resp.text.index("/static/react-init.js")
 
 
 async def test_react_artifact_without_optional_imports_loads_no_optional_libraries(client):

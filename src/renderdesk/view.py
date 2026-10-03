@@ -613,8 +613,10 @@ def _build_react_raw_html(artifact: Artifact) -> tuple[str, bool]:
         f"{icons_asset}"
         '<div id="root"></div>'
         f'<script id="artifact-source" type="application/json">{source_json}</script>'
-        f"{_REACT_ASSETS}"
+        # Optional libraries go first: react-init.js runs the artifact the
+        # moment it executes, so any global it require()s must already exist.
         f"{_optional_react_assets(artifact.content)}"
+        f"{_REACT_ASSETS}"
     )
     return content, has_bootstrap_icons
 
