@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Static maps in `html` and `react` artifacts. `topojson-client` is now
+  vendored (`import "topojson-client"` in `react`; the cdnjs `topojson`
+  URL is rewritten for `html`), and offline Natural Earth geometry is
+  preloaded as `RenderdeskGeo["countries-110m"]`, `"countries-50m"`,
+  `"states-10m"` or `"counties-10m"`. Draw it with `d3`'s `d3-geo`.
+  Only the datasets an artifact names are loaded.
+
+### Security
+
+- Updated `pyjwt` to 2.15.1 and `mako` to 1.4.3, which clear the
+  vulnerabilities Trivy reported against 2.13.0 and 1.3.12.
+
 ## [1.2.6] - 2026-10-02
 
 ### Fixed
