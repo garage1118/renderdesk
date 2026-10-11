@@ -1,0 +1,6 @@
+# Dockerfile: image user should not be 'root'. Intentional: docker-entrypoint.sh
+# starts as root only to chown the persistent /app/data volume (which may have
+# been left root-owned by older images), then drops to appuser via gosu before
+# starting the server. Running the image as appuser outright would break that
+# upgrade path.
+DS-0002
