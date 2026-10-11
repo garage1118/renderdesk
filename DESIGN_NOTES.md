@@ -139,6 +139,24 @@ Discoverability rides the existing self-describing MCP surfaces:
 `publish_artifact`'s tool docstring and its MCP prompt (`mcp_server.py`)
 both enumerate the vendored libraries and the Bootstrap Icons convention.
 
+**Static maps: d3-geo + topojson-client + offline TopoJSON** (choropleths
+and point markers only — no tiles, no pan/zoom library). `d3` already
+bundles `d3-geo`, so the only new library is `topojson-client` (global
+`topojson`; cdnjs slug `topojson` is rewritten to it for `html`, and
+`import "topojson-client"` works in `react`). The geometry is Natural Earth
+via `world-atlas` (`countries-110m`, `countries-50m`) and `us-atlas`
+(`states-10m`, `counties-10m`), all ISC/public domain. Because artifacts
+run with `connect-src 'none'`, `fetch`/`d3.json` can't load a `.json`, so
+each dataset is vendored as a `static/vendor/geo/<key>.js` script that
+registers itself on `window.RenderdeskGeo[<key>]`. An artifact opts in by
+naming the key as a string literal (`_geo_dataset_assets`, same
+regex-over-source heuristic as the libraries above); only the named
+datasets load, since `counties-10m` is ~840KB. In `html` the tags are
+spliced into `<head>` (not before `</body>`) so the artifact's own inline
+script finds them already registered, and `script-src` gains `'self'`.
+Deliberately not vendored: MapLibre/Leaflet (need tiles or a style spec),
+the 10m world dataset (3.6MB), and any `*-albers-*` pre-projected files.
+
 Recharts remains unvendored — see Limitations and roadmap.
 
 **MCP tool surface** is intentionally narrow:

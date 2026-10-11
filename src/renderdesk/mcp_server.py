@@ -45,10 +45,14 @@ async def publish_artifact(
     and "react-dom" are always available; also importable, only if actually used (each adds its
     own <script>, so nothing loads that isn't imported): "three" (global THREE — core only, no
     OrbitControls/loaders), "lodash", "d3", "mathjs", "chart.js" or "chart.js/auto" (global
-    Chart), "tone", "papaparse", "xlsx" (SheetJS). No other packages — no bundler, so any other
-    import fails at render time with a readable error instead of a blank page. Icons: a
+    Chart), "tone", "papaparse", "xlsx" (SheetJS), "topojson-client" (global topojson). No other packages — no
+    bundler, so any other import fails at render time with a readable error instead of a blank page. Icons: a
     Bootstrap Icons class (e.g. className="bi bi-camera") works without any import — it's CSS,
     not a JS package — in both format="react" and format="html".
+    Maps (react and html, static/offline — no tile servers): draw with d3-geo + topojson. Offline
+    TopoJSON is preloaded as window.RenderdeskGeo["countries-110m"|"countries-50m"|"states-10m"|
+    "counties-10m"] (Natural Earth; states/counties are US, ids are FIPS codes) — reference the key
+    as a string literal and use it directly; fetch()/d3.json() are blocked.
     If content is too large to generate as tool-call output in one response (e.g. self-contained
     HTML with embedded base64 images), see the "upload_large_artifact" prompt instead."""
     connection_id = get_current_connection_id()
@@ -173,7 +177,10 @@ def publish_artifact_prompt(content: str, title: str = "") -> str:
         "- Vendored libraries, usable in both `html` (via the cdnjs URL above) and "
         "`react` (via `import`): `three` (global `THREE` — core only, no "
         "OrbitControls/loaders), `lodash`, `d3`, `mathjs`, `chart.js`/`chart.js/auto` "
-        "(global `Chart`), `tone`, `papaparse`, `xlsx` (SheetJS). Icons: a Bootstrap "
+        "(global `Chart`), `tone`, `papaparse`, `xlsx` (SheetJS), `topojson-client` "
+        "(global `topojson`). Maps: d3-geo + topojson over offline data preloaded as "
+        '`RenderdeskGeo["countries-110m" | "countries-50m" | "states-10m" | "counties-10m"]` '
+        "(reference the key as a string literal; fetch is blocked). Icons: a Bootstrap "
         'Icons class (e.g. `class="bi bi-camera"` / `className="bi bi-camera"`) works '
         "in either format with no import at all — it's CSS, not a JS package.\n\n"
         f"Title: {title or '(infer a short, descriptive title from the content)'}\n\n"

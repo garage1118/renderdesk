@@ -518,6 +518,7 @@ _REACT_OPTIONAL_LIBRARY_CASES = [
     ('import * as Tone from "tone";', "/static/vendor/tone-15.1.22.js"),
     ('import Papa from "papaparse";', "/static/vendor/papaparse-5.6.0.min.js"),
     ('import * as XLSX from "xlsx";', "/static/vendor/xlsx-0.20.3.full.min.js"),
+    ('import * as topojson from "topojson-client";', "/static/vendor/topojson-client-3.1.0.min.js"),
     ('const _ = require("lodash");', "/static/vendor/lodash-4.18.1.min.js"),
 ]
 
@@ -794,3 +795,59 @@ async def test_artifact_responses_state_x_frame_options_matching_frame_ancestors
         # Served as text/plain or text/csv, framed by nothing — the stricter
         # middleware default is correct for them.
         assert raw_resp.headers["x-frame-options"] == "DENY"
+
+
+async def test_react_artifact_geo_dataset_loads_only_named_keys(client):
+    connection_id = await make_connection()
+    jsx = (
+        'import * as topojson from "topojson-client";\n'
+        'const world = window.RenderdeskGeo["countries-110m"];\n'
+        "export default function App() { return <h1>Map</h1>; }\n"
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    assert "/static/vendor/geo/countries-110m.js" in resp.text
+    assert "/static/vendor/geo/counties-10m.js" not in resp.text
+    assert "/static/vendor/geo/countries-50m.js" not in resp.text
+
+
+async def test_html_artifact_geo_dataset_injected_in_head_with_same_origin_scripts(client):
+    connection_id = await make_connection()
+    html = (
+        "<html><head><title>m</title></head><body><script>"
+        'const t = RenderdeskGeo["states-10m"];</script></body></html>'
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert resp.status_code == 200
+    tag = '<script src="/static/vendor/geo/states-10m.js"></script>'
+    assert tag in resp.text
+    assert resp.text.index(tag) < resp.text.index("<title>")
+    assert "/static/vendor/geo/counties-10m.js" not in resp.text
+    assert "script-src 'unsafe-inline' 'unsafe-eval' 'self';" in resp.headers["content-security-policy"]
+
+
+async def test_html_artifact_geo_key_without_registry_name_loads_nothing(client):
+    connection_id = await make_connection()
+    html = '<html><body><p>see "countries-110m" docs</p></body></html>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert "/static/vendor/geo/" not in resp.text
+    assert "'self'" not in resp.headers["content-security-policy"].split("script-src")[1].split(";")[0]
+
+
+async def test_html_artifact_cdnjs_topojson_is_rewritten_to_vendored_client(client):
+    connection_id = await make_connection()
+    html = '<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>'
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, html, "html")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert '<script src="/static/vendor/topojson-client-3.1.0.min.js"></script>' in resp.text

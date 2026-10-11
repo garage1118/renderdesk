@@ -29,6 +29,7 @@
         tone: "Tone",
         papaparse: "Papa",
         xlsx: "XLSX",
+        "topojson-client": "topojson",
     };
 
     function showError(err) {

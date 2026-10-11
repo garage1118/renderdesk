@@ -123,6 +123,7 @@ _CHARTJS_VERSION = "4.5.1"
 _TONE_VERSION = "15.1.22"
 _PAPAPARSE_VERSION = "5.6.0"
 _XLSX_VERSION = "0.20.3"
+_TOPOJSON_CLIENT_VERSION = "3.1.0"
 
 
 def _specifier_pattern(*specifiers: str) -> re.Pattern[str]:
@@ -146,6 +147,10 @@ _REACT_OPTIONAL_LIBRARIES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_specifier_pattern("tone"), f'<script src="/static/vendor/tone-{_TONE_VERSION}.js"></script>'),
     (_specifier_pattern("papaparse"), f'<script src="/static/vendor/papaparse-{_PAPAPARSE_VERSION}.min.js"></script>'),
     (_specifier_pattern("xlsx"), f'<script src="/static/vendor/xlsx-{_XLSX_VERSION}.full.min.js"></script>'),
+    (
+        _specifier_pattern("topojson-client"),
+        f'<script src="/static/vendor/topojson-client-{_TOPOJSON_CLIENT_VERSION}.min.js"></script>',
+    ),
 )
 
 
@@ -160,6 +165,48 @@ def _optional_react_assets(source: str) -> str:
     undefined-check backstop for exactly that gap, so a miss here fails
     as a readable in-page error rather than a silent blank page."""
     return "".join(tag for pattern, tag in _REACT_OPTIONAL_LIBRARIES if pattern.search(source))
+
+
+# Offline map geometry (Natural Earth via world-atlas / us-atlas, TopoJSON),
+# vendored as one script per dataset that registers itself on
+# `window.RenderdeskGeo[<key>]` — a script rather than a .json file because
+# html/react artifacts run with connect-src 'none', so fetch()/d3.json()
+# can't reach it. An artifact opts in by naming the key (e.g.
+# `RenderdeskGeo["countries-110m"]`); only datasets whose key literally
+# appears are loaded, since counties-10m alone is ~840KB.
+_GEO_DATASETS = ("countries-110m", "countries-50m", "states-10m", "counties-10m")
+
+
+def _geo_dataset_assets(source: str) -> str:
+    """<script> tags for the geo datasets `source` references, or "" if it
+    never mentions RenderdeskGeo. Same regex-over-raw-source heuristic as
+    _optional_react_assets; a miss surfaces as `RenderdeskGeo[key]` being
+    undefined in the artifact's own code."""
+    if "RenderdeskGeo" not in source:
+        return ""
+    return "".join(
+        f'<script src="/static/vendor/geo/{key}.js"></script>'
+        for key in _GEO_DATASETS
+        if re.search(rf"""['"`]{re.escape(key)}['"`]""", source)
+    )
+
+
+_HEAD_OPEN_RE = re.compile(r"<head(?:\s[^>]*)?>", re.IGNORECASE)
+
+
+def _inject_geo_datasets_if_present(content: str) -> tuple[str, bool]:
+    """Splice geo dataset <script> tags into an html artifact. They go in
+    <head> (or at the very start if there's none), not before </body> like
+    mermaid/icons: the datasets are dependency-free, and the artifact's own
+    inline script usually runs mid-body and has to find them already
+    registered."""
+    assets = _geo_dataset_assets(_strip_html_comments(content))
+    if not assets:
+        return content, False
+    match = _HEAD_OPEN_RE.search(content)
+    if match:
+        return content[: match.end()] + assets + content[match.end() :], True
+    return assets + content, True
 
 
 _BOOTSTRAP_ICONS_VERSION = "1.13.1"
@@ -540,6 +587,7 @@ _CDNJS_SLUG_TO_ASSET = {
     "tone": f'<script src="/static/vendor/tone-{_TONE_VERSION}.js"></script>',
     "PapaParse": f'<script src="/static/vendor/papaparse-{_PAPAPARSE_VERSION}.min.js"></script>',
     "xlsx": f'<script src="/static/vendor/xlsx-{_XLSX_VERSION}.full.min.js"></script>',
+    "topojson": f'<script src="/static/vendor/topojson-client-{_TOPOJSON_CLIENT_VERSION}.min.js"></script>',
 }
 
 
@@ -616,6 +664,7 @@ def _build_react_raw_html(artifact: Artifact) -> tuple[str, bool]:
         # Optional libraries go first: react-init.js runs the artifact the
         # moment it executes, so any global it require()s must already exist.
         f"{_optional_react_assets(artifact.content)}"
+        f"{_geo_dataset_assets(artifact.content)}"
         f"{_REACT_ASSETS}"
     )
     return content, has_bootstrap_icons
@@ -731,9 +780,10 @@ async def view_artifact_raw(artifact_id: str) -> Response:
 
     content, has_mermaid = _inject_mermaid_if_present(artifact.content)
     content, has_cdn_rewrite = _rewrite_cdn_library_urls(content)
+    content, has_geo = _inject_geo_datasets_if_present(content)
     content, has_bootstrap_icons = _inject_bootstrap_icons_if_present(content)
     csp = _HTML_CSP
-    if has_mermaid or has_cdn_rewrite:
+    if has_mermaid or has_cdn_rewrite or has_geo:
         csp = _with_same_origin_scripts(csp)
     if has_bootstrap_icons:
         csp = _with_same_origin_styles_and_fonts(csp)
