@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.1] - 2026-11-10
+
+### Security
+
+- Rebuilt the image so it picks up the current Debian security updates and
+  base-image fixes; no application changes.
+
 ## [1.3.0] - 2026-10-11
 
 ### Added
