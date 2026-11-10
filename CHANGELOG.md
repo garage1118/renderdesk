@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.3.2] - 2026-11-10
+
+### Security
+
+- Updated `authlib` to 1.9.x, `certifi` to 2026.10.18, `joserfc` to 1.8.0
+  and `mcp` to 1.30.0, which clear the vulnerabilities Trivy reported
+  against the previous locked versions. `mcp` is now capped below 2.0.
+
 ## [1.3.1] - 2026-11-10
 
 ### Security
