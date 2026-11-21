@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.0] - 2026-11-21
+
+### Added
+
+- Two more offline map datasets for `html` and `react` artifacts, loaded only
+  when named: `RenderdeskGeo["admin1-10m"]` (worldwide states/provinces,
+  TopoJSON, ids are ISO 3166-2) and `RenderdeskGeo["places-10m"]` (about 7,300
+  populated places as GeoJSON points with population, usable as a gazetteer).
+  Both are Natural Earth; regional detail only, no street level.
+
 ## [1.3.2] - 2026-11-10
 
 ### Security
