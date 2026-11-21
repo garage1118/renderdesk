@@ -154,6 +154,15 @@ regex-over-source heuristic as the libraries above); only the named
 datasets load, since `counties-10m` is ~840KB. In `html` the tags are
 spliced into `<head>` (not before `</body>`) so the artifact's own inline
 script finds them already registered, and `script-src` gains `'self'`.
+Two further opt-in Natural Earth 10m layers (same mechanism): `admin1-10m`
+(worldwide states/provinces, TopoJSON object `admin1`, id = ISO 3166-2,
+simplified + quantized to ~1.6MB) and `places-10m` (~7k populated places as a
+GeoJSON FeatureCollection of Points sorted by population, ~1.2MB; doubles as a
+gazetteer). Regional detail only — still no street level, by decision
+(see the declined tile/per-city options). Built with geopandas + `topojson`
+(toposimplify 0.05, prequantize 20000) from `ne_10m_admin_1_states_provinces`
+and `ne_10m_populated_places_simple`.
+
 Deliberately not vendored: MapLibre/Leaflet (need tiles or a style spec),
 the 10m world dataset (3.6MB), and any `*-albers-*` pre-projected files.
 

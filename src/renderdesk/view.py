@@ -173,8 +173,16 @@ def _optional_react_assets(source: str) -> str:
 # html/react artifacts run with connect-src 'none', so fetch()/d3.json()
 # can't reach it. An artifact opts in by naming the key (e.g.
 # `RenderdeskGeo["countries-110m"]`); only datasets whose key literally
-# appears are loaded, since counties-10m alone is ~840KB.
-_GEO_DATASETS = ("countries-110m", "countries-50m", "states-10m", "counties-10m")
+# appears are loaded, since counties-10m alone is ~840KB (admin1-10m ~1.6MB and
+# places-10m ~1.2MB, both Natural Earth).
+_GEO_DATASETS = (
+    "countries-110m",
+    "countries-50m",
+    "states-10m",
+    "counties-10m",
+    "admin1-10m",
+    "places-10m",
+)
 
 
 def _geo_dataset_assets(source: str) -> str:

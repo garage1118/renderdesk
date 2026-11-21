@@ -851,3 +851,19 @@ async def test_html_artifact_cdnjs_topojson_is_rewritten_to_vendored_client(clie
 
     resp = await client.get(f"/a/{published['artifact_id']}/raw")
     assert '<script src="/static/vendor/topojson-client-3.1.0.min.js"></script>' in resp.text
+
+
+async def test_react_artifact_new_geo_datasets_load_when_named(client):
+    connection_id = await make_connection()
+    jsx = (
+        'const a = window.RenderdeskGeo["admin1-10m"];\n'
+        "const p = window.RenderdeskGeo['places-10m'];\n"
+        "export default function App() { return <h1>Map</h1>; }\n"
+    )
+    async with session_scope() as session:
+        published = await tools.publish_artifact(session, connection_id, jsx, "react")
+
+    resp = await client.get(f"/a/{published['artifact_id']}/raw")
+    assert "/static/vendor/geo/admin1-10m.js" in resp.text
+    assert "/static/vendor/geo/places-10m.js" in resp.text
+    assert "/static/vendor/geo/countries-50m.js" not in resp.text

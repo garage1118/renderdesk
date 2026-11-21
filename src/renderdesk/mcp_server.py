@@ -51,8 +51,12 @@ async def publish_artifact(
     not a JS package — in both format="react" and format="html".
     Maps (react and html, static/offline — no tile servers): draw with d3-geo + topojson. Offline
     TopoJSON is preloaded as window.RenderdeskGeo["countries-110m"|"countries-50m"|"states-10m"|
-    "counties-10m"] (Natural Earth; states/counties are US, ids are FIPS codes) — reference the key
-    as a string literal and use it directly; fetch()/d3.json() are blocked.
+    "counties-10m"|"admin1-10m"|"places-10m"] (Natural Earth; states/counties are US, ids are FIPS
+    codes; "admin1-10m" is TopoJSON of worldwide states/provinces, object `admin1`, id = ISO 3166-2,
+    properties {name, country (ISO a3)}; "places-10m" is a GeoJSON FeatureCollection of ~7k cities as
+    Points, sorted by population, properties {name, country, pop, admin1?, capital?} — also usable as a
+    gazetteer to look up coordinates) — reference the key as a string literal and use it directly;
+    fetch()/d3.json() are blocked.
     If content is too large to generate as tool-call output in one response (e.g. self-contained
     HTML with embedded base64 images), see the "upload_large_artifact" prompt instead."""
     connection_id = get_current_connection_id()
@@ -179,8 +183,10 @@ def publish_artifact_prompt(content: str, title: str = "") -> str:
         "OrbitControls/loaders), `lodash`, `d3`, `mathjs`, `chart.js`/`chart.js/auto` "
         "(global `Chart`), `tone`, `papaparse`, `xlsx` (SheetJS), `topojson-client` "
         "(global `topojson`). Maps: d3-geo + topojson over offline data preloaded as "
-        '`RenderdeskGeo["countries-110m" | "countries-50m" | "states-10m" | "counties-10m"]` '
-        "(reference the key as a string literal; fetch is blocked). Icons: a Bootstrap "
+        '`RenderdeskGeo["countries-110m" | "countries-50m" | "states-10m" | "counties-10m" '
+        '| "admin1-10m" | "places-10m"]` (admin1 = worldwide states/provinces TopoJSON; '
+        "places = ~7k cities as GeoJSON points; reference the key as a string literal; "
+        "fetch is blocked). Icons: a Bootstrap "
         'Icons class (e.g. `class="bi bi-camera"` / `className="bi bi-camera"`) works '
         "in either format with no import at all — it's CSS, not a JS package.\n\n"
         f"Title: {title or '(infer a short, descriptive title from the content)'}\n\n"
