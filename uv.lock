@@ -1336,7 +1336,7 @@ wheels = [
 
 [[package]]
 name = "renderdesk"
-version = "1.4.2rc1"
+version = "1.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

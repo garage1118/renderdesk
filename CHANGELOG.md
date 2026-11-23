@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.2] - 2026-11-23
+
+### Changed
+
+- Updated the GitHub Actions used by the release workflow: `actions/checkout`
+  7, `docker/build-push-action` 7.4, `docker/setup-buildx-action` 4.4 and
+  `docker/login-action` 4.8. No change to the application.
+
 ## [1.4.1] - 2026-11-23
 
 ### Fixed
