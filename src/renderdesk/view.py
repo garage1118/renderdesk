@@ -32,8 +32,10 @@ _HTML_CSP = (
     # document in our real origin, with access to cookies and same-origin
     # requests. The CSP sandbox directive forces the same opaque-origin,
     # no-cookie-access restrictions here as the iframe's sandbox="allow-scripts"
-    # attribute already applies when this is loaded embedded.
-    "sandbox allow-scripts; "
+    # attribute already applies when this is loaded embedded. allow-popups
+    # (+ escape-sandbox) lets target=_blank links open as normal tabs; the
+    # artifact itself still has no cookies/same-origin access.
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox; "
     "script-src 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'unsafe-inline'; "
     "img-src data: blob:; "
@@ -745,7 +747,7 @@ async def view_artifact(artifact_id: str) -> Response:
     page = (
         f"<!doctype html><title>{title}</title>{_THEME_TOKENS_CSS}{_THEME_SCRIPT}"
         "<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style>"
-        f'<iframe sandbox="allow-scripts" src="/a/{safe_id}/raw"></iframe>'
+        f'<iframe sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" src="/a/{safe_id}/raw"></iframe>'
     )
     # frame-src 'self' is only needed here, to embed the same-origin /raw
     # iframe above — the markdown/code branches above never embed an
