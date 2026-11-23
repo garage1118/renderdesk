@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.4.1] - 2026-11-23
+
+### Fixed
+
+- Links in `html` artifacts that use `target="_blank"` now open in a new tab.
+  The artifact sandbox gained `allow-popups` and
+  `allow-popups-to-escape-sandbox`; artifacts still have no cookie or
+  same-origin access, and links without a target remain blocked.
+
 ## [1.4.0] - 2026-11-21
 
 ### Added
